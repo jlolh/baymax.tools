@@ -1812,16 +1812,16 @@
                         </div>
                     </div>
 
-                    <div className="flex-1 bg-slate-100 p-6 overflow-hidden relative">
+                    <div className="flex-1 bg-slate-100 p-4 overflow-hidden relative">
                         {view === 'home' && (
-                            <div className="h-full flex flex-col animate-fade-in pt-4">
-                                <div className="mb-8 px-2">
+                            <div className="h-full flex flex-col animate-fade-in">
+                                <div className="mb-4 px-2 shrink-0">
                                     <h1 className="text-3xl font-black text-slate-800 leading-tight">
                                         你好。<br />我是<span className="text-rose-500">大白</span>。
                                     </h1>
-                                    <p className="text-slate-400 mt-2 font-medium">你的個人健康護理助理。</p>
+                                    <p className="text-slate-400 mt-1 font-medium">你的個人健康護理助理。</p>
                                 </div>
-                                <div className="grid grid-cols-2 gap-6 auto-rows-fr pb-safe-bottom no-scrollbar overflow-y-auto">
+                                <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar grid grid-cols-2 gap-4 auto-rows-min content-start pb-safe-bottom px-1">
                                     {tools.map((tool) => (
                                         <button
                                             key={tool.id}
