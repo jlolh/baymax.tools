@@ -98,9 +98,21 @@
         // ==========================================
         // 設定 & API
         // ==========================================
-        const API_KEY = "AIzaSyCS7cl7yFQDWfDOnjLx_RrZ_67mhbL4Uqk";
+        const DEFAULT_API_KEY = "AIzaSyCS7cl7yFQDWfDOnjLx_RrZ_67mhbL4Uqk";
         const PROXY_BASE = "https://gemini-api-proxy-omega-khaki.vercel.app";
         const API_URL = `${PROXY_BASE}/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent`;
+
+        /**
+         * 動態取得 API Key：優先從 localStorage 讀取，否則使用預設值
+         */
+        function getApiKey() {
+            try {
+                const saved = localStorage.getItem('baymax_api_key');
+                return saved && saved.trim() ? saved.trim() : DEFAULT_API_KEY;
+            } catch (e) {
+                return DEFAULT_API_KEY;
+            }
+        }
 
         // ==========================================
         // 共用工具函式
@@ -146,10 +158,11 @@
          * 呼叫 Gemini API
          */
         async function callGemini(parts, systemPrompt) {
-            if (!API_KEY) throw new Error("請先填入 API Key");
+            const apiKey = getApiKey();
+            if (!apiKey) throw new Error("請先在設定頁面填入 API Key");
 
             try {
-                const response = await fetch(`${API_URL}?key=${API_KEY}`, {
+                const response = await fetch(`${API_URL}?key=${apiKey}`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -3015,6 +3028,218 @@ JSON結構: {
         }
 
         // ==========================================
+        // 工具：設定頁面
+        // ==========================================
+        function ToolSettings({ onBack }) {
+            const [keyInput, setKeyInput] = useState('');
+            const [showKey, setShowKey] = useState(false);
+            const [testStatus, setTestStatus] = useState(null); // null | 'testing' | 'success' | 'error'
+            const [testMsg, setTestMsg] = useState('');
+            const [saved, setSaved] = useState(false);
+
+            // 載入已儲存的 key
+            useEffect(() => {
+                try {
+                    const stored = localStorage.getItem('baymax_api_key');
+                    if (stored) setKeyInput(stored);
+                } catch (e) {}
+            }, []);
+
+            const currentKey = getApiKey();
+            const isUsingDefault = !localStorage.getItem('baymax_api_key') || localStorage.getItem('baymax_api_key')?.trim() === '';
+            const maskedKey = (key) => {
+                if (!key) return '';
+                if (key.length <= 8) return '••••••••';
+                return key.slice(0, 4) + '••••••••••••' + key.slice(-4);
+            };
+
+            const handleSave = () => {
+                const trimmed = keyInput.trim();
+                if (trimmed) {
+                    localStorage.setItem('baymax_api_key', trimmed);
+                } else {
+                    localStorage.removeItem('baymax_api_key');
+                }
+                setSaved(true);
+                setTestStatus(null);
+                setTimeout(() => setSaved(false), 2000);
+            };
+
+            const handleReset = () => {
+                localStorage.removeItem('baymax_api_key');
+                setKeyInput('');
+                setSaved(true);
+                setTestStatus(null);
+                setTimeout(() => setSaved(false), 2000);
+            };
+
+            const handleTest = async () => {
+                setTestStatus('testing');
+                setTestMsg('');
+                const key = keyInput.trim() || DEFAULT_API_KEY;
+                try {
+                    const response = await fetch(`${API_URL}?key=${key}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            contents: [{ role: "user", parts: [{ text: "回覆 OK" }] }],
+                            generationConfig: { maxOutputTokens: 10 }
+                        }),
+                    });
+                    if (response.ok) {
+                        setTestStatus('success');
+                        setTestMsg('API Key 連線成功！');
+                    } else {
+                        const errText = await response.text();
+                        setTestStatus('error');
+                        if (response.status === 400 || response.status === 403) {
+                            setTestMsg('API Key 無效或已過期');
+                        } else {
+                            setTestMsg(`錯誤 ${response.status}: ${errText.slice(0, 100)}`);
+                        }
+                    }
+                } catch (err) {
+                    setTestStatus('error');
+                    setTestMsg('連線失敗：無法連接伺服器');
+                }
+            };
+
+            return (
+                <div className="h-full flex flex-col animate-fade-in">
+                    <PageHeader title="設定" subtitle="API 金鑰管理" onBack={onBack} />
+                    <div className="flex-1 overflow-y-auto no-scrollbar space-y-4 pb-10">
+
+                        {/* 說明卡片 */}
+                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                            <div className="flex items-center gap-3 mb-3">
+                                <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center">
+                                    <Icons.Settings size={20} className="text-blue-500" />
+                                </div>
+                                <h3 className="font-bold text-slate-700">API Key 設定</h3>
+                            </div>
+                            <p className="text-sm text-slate-500 leading-relaxed">
+                                本應用使用 Google Gemini API 提供 AI 功能。你可以使用預設的 API Key，或填入自己的 Key 來獲得更穩定的服務。
+                            </p>
+                        </div>
+
+                        {/* 當前狀態 */}
+                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                            <h4 className="text-xs font-bold text-slate-400 mb-3">目前使用的 Key</h4>
+                            <div className={`flex items-center gap-2 px-4 py-3 rounded-xl ${isUsingDefault ? 'bg-amber-50' : 'bg-green-50'}`}>
+                                <div className={`w-2 h-2 rounded-full ${isUsingDefault ? 'bg-amber-400' : 'bg-green-400'}`}></div>
+                                <span className={`text-sm font-medium ${isUsingDefault ? 'text-amber-700' : 'text-green-700'}`}>
+                                    {isUsingDefault ? '使用預設 Key' : '使用自訂 Key'}
+                                </span>
+                            </div>
+                            <div className="mt-2 px-4 py-2 bg-slate-50 rounded-xl">
+                                <code className="text-xs text-slate-400 break-all font-mono">
+                                    {maskedKey(currentKey)}
+                                </code>
+                            </div>
+                        </div>
+
+                        {/* 輸入 API Key */}
+                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                            <h4 className="text-xs font-bold text-slate-400 mb-3">自訂 API Key</h4>
+                            <div className="relative">
+                                <input
+                                    type={showKey ? "text" : "password"}
+                                    value={keyInput}
+                                    onChange={(e) => { setKeyInput(e.target.value); setSaved(false); }}
+                                    placeholder="貼上你的 Gemini API Key..."
+                                    className="w-full px-4 py-3 pr-12 rounded-xl bg-slate-50 border-2 border-slate-100 focus:border-blue-300 focus:outline-none text-sm text-slate-700 font-mono transition"
+                                />
+                                <button
+                                    onClick={() => setShowKey(!showKey)}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition"
+                                >
+                                    {showKey ? <Icons.EyeOff size={18} /> : <Icons.Eye size={18} />}
+                                </button>
+                            </div>
+
+                            {/* 操作按鈕 */}
+                            <div className="flex gap-2 mt-4">
+                                <button
+                                    onClick={handleSave}
+                                    className="flex-1 py-3 bg-blue-500 text-white rounded-xl font-bold text-sm hover:bg-blue-600 active:scale-95 transition-all"
+                                >
+                                    {saved ? '✓ 已儲存' : '儲存'}
+                                </button>
+                                <button
+                                    onClick={handleTest}
+                                    disabled={testStatus === 'testing'}
+                                    className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 active:scale-95 transition-all disabled:opacity-50"
+                                >
+                                    {testStatus === 'testing' ? '測試中...' : '測試連線'}
+                                </button>
+                                <button
+                                    onClick={handleReset}
+                                    className="py-3 px-4 bg-red-50 text-red-400 rounded-xl font-bold text-sm hover:bg-red-100 active:scale-95 transition-all"
+                                >
+                                    重設
+                                </button>
+                            </div>
+
+                            {/* 測試結果 */}
+                            {testStatus && testStatus !== 'testing' && (
+                                <div className={`mt-3 px-4 py-3 rounded-xl text-sm font-medium ${testStatus === 'success' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500'}`}>
+                                    {testMsg}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 安全提示 */}
+                        <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-[2rem] p-5 shadow-lg">
+                            <h4 className="text-xs font-bold text-slate-400 mb-3">🔒 安全建議</h4>
+                            <div className="space-y-3 text-sm text-slate-300 leading-relaxed">
+                                <div className="flex items-start gap-2">
+                                    <span className="text-amber-400 shrink-0 mt-0.5">1.</span>
+                                    <p><strong className="text-white">不要共享含有 API Key 的網址。</strong>前端 JavaScript 中的 Key 任何人都能透過瀏覽器開發者工具看到。</p>
+                                </div>
+                                <div className="flex items-start gap-2">
+                                    <span className="text-amber-400 shrink-0 mt-0.5">2.</span>
+                                    <p><strong className="text-white">建議設定 API Key 使用限制。</strong>到 <span className="text-blue-400">Google AI Studio</span> 設定每日用量上限，避免被濫用。</p>
+                                </div>
+                                <div className="flex items-start gap-2">
+                                    <span className="text-amber-400 shrink-0 mt-0.5">3.</span>
+                                    <p><strong className="text-white">理想做法：使用後端代理。</strong>將 API Key 存放在伺服器端（如 Vercel / Cloudflare Workers），前端只呼叫你自己的 API 端點，Key 永遠不會暴露。</p>
+                                </div>
+                                <div className="flex items-start gap-2">
+                                    <span className="text-amber-400 shrink-0 mt-0.5">4.</span>
+                                    <p><strong className="text-white">定期輪換 Key。</strong>如果懷疑 Key 被洩漏，立即到 Google AI Studio 重新產生新的 Key。</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 取得 Key 指引 */}
+                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                            <h4 className="text-xs font-bold text-slate-400 mb-3">如何取得 API Key？</h4>
+                            <ol className="space-y-2 text-sm text-slate-600">
+                                <li className="flex items-start gap-2">
+                                    <span className="bg-blue-100 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
+                                    <span>前往 <strong>Google AI Studio</strong> (aistudio.google.com)</span>
+                                </li>
+                                <li className="flex items-start gap-2">
+                                    <span className="bg-blue-100 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
+                                    <span>登入 Google 帳號後，點擊 <strong>「Get API Key」</strong></span>
+                                </li>
+                                <li className="flex items-start gap-2">
+                                    <span className="bg-blue-100 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">3</span>
+                                    <span>點擊 <strong>「Create API Key」</strong>，選擇或建立 GCP 專案</span>
+                                </li>
+                                <li className="flex items-start gap-2">
+                                    <span className="bg-blue-100 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">4</span>
+                                    <span>複製產生的 Key，貼到上方欄位即可</span>
+                                </li>
+                            </ol>
+                        </div>
+
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
         // 主程式：Baymax OS
         // ==========================================
         function App() {
@@ -3050,6 +3275,7 @@ JSON結構: {
                 firstaid: ToolFirstAid,
                 travel: ToolTravel,
                 translator: ToolTranslator,
+                settings: ToolSettings,
             };
 
             const goHome = useCallback(() => setView('home'), []);
@@ -3066,6 +3292,14 @@ JSON結構: {
                         <div className="text-[10px] font-bold text-slate-300 tracking-[0.3em] mt-3 uppercase">
                             Personal Companion
                         </div>
+                        {/* 設定按鈕 */}
+                        <button
+                            onClick={() => setView('settings')}
+                            className="absolute right-4 bottom-4 w-8 h-8 rounded-full bg-slate-50 hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-all active:scale-90"
+                            title="設定"
+                        >
+                            <Icons.Settings size={16} />
+                        </button>
                     </div>
 
                     <div className="flex-1 bg-slate-100 p-4 overflow-hidden relative">
