@@ -386,6 +386,20 @@
                     <path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/>
                 </svg>
             ),
+            MapPin: (p) => (
+                <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+                    <circle cx="12" cy="10" r="3"/>
+                </svg>
+            ),
+            Languages: (p) => (
+                <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/>
+                    <path d="m22 22-5-10-5 10"/><path d="M14 18h6"/>
+                </svg>
+            ),
         };
         // PenLine 與 Edit3 完全相同，統一使用 Edit3
         Icons.PenLine = Icons.Edit3;
@@ -2557,6 +2571,450 @@ JSON結構: {
         }
 
         // ==========================================
+        // 工具 12: 旅行助手 (Travel Planner)
+        // ==========================================
+        function ToolTravel({ onBack }) {
+            const [plans, setPlans] = useLocalStorage('baymax_travels', []);
+            const [viewMode, setViewMode] = useState('list');
+            const [selectedId, setSelectedId] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [newTrip, setNewTrip] = useState({ destination: '', days: '3', style: '' });
+
+            const travelStyles = [
+                { label: '輕鬆慢遊', icon: '🌿' },
+                { label: '文化深度', icon: '🏛️' },
+                { label: '美食之旅', icon: '🍜' },
+                { label: '親子同行', icon: '👨‍👩‍👧' },
+                { label: '冒險探索', icon: '🏔️' },
+                { label: '購物血拼', icon: '🛍️' },
+            ];
+
+            const handleGenerate = async () => {
+                if (!newTrip.destination.trim()) {
+                    return alert("請輸入目的地");
+                }
+                setLoading(true);
+                try {
+                    const styleHint = newTrip.style ? `旅行風格偏好：${newTrip.style}。` : '';
+                    const prompt = `你是大白，一個貼心的旅行規劃助手。為使用者規劃前往「${newTrip.destination}」的 ${newTrip.days} 天行程。${styleHint}
+使用繁體中文。
+JSON結構: {
+    "destination": "String",
+    "days": Number,
+    "summary": "String (一句話描述這趟旅程)",
+    "packingList": ["String"],
+    "itinerary": [{ "day": Number, "title": "String", "activities": [{ "time": "String", "activity": "String", "tip": "String" }] }],
+    "warnings": ["String (當地注意事項)"],
+    "baymaxTip": "String"
+}`;
+                    const data = await callGemini([{ text: `規劃 ${newTrip.destination} ${newTrip.days} 天行程` }], prompt);
+                    const plan = { id: Date.now(), ...data, createdAt: new Date().toISOString().split('T')[0] };
+                    setPlans(prev => [plan, ...prev]);
+                    setSelectedId(plan.id);
+                    setViewMode('detail');
+                    setNewTrip({ destination: '', days: '3', style: '' });
+                } catch (e) {
+                    alert("規劃失敗，請重試");
+                }
+                setLoading(false);
+            };
+
+            const handleDelete = (id) => {
+                if (confirm("確定刪除此行程？")) {
+                    setPlans(prev => prev.filter(p => p.id !== id));
+                    if (selectedId === id) { setSelectedId(null); setViewMode('list'); }
+                }
+            };
+
+            const activePlan = plans.find(p => p.id === selectedId);
+
+            // 行程詳情頁
+            if (viewMode === 'detail' && activePlan) {
+                const plan = activePlan;
+                return (
+                    <div className="flex flex-col h-full animate-slide-up bg-sky-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                        <PageHeader onBack={() => { setViewMode('list'); setSelectedId(null); }} title={plan.destination}>
+                            <button onClick={() => handleDelete(plan.id)} className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm text-slate-400 hover:text-rose-500 transition">
+                                <Icons.Trash2 size={18} />
+                            </button>
+                        </PageHeader>
+                        <div className="flex-1 overflow-y-auto p-6 no-scrollbar pb-safe-bottom space-y-4">
+                            {/* 摘要 */}
+                            <div className="bg-white rounded-[2rem] p-5 shadow-soft text-center">
+                                <div className="text-4xl mb-2">✈️</div>
+                                <h3 className="text-xl font-black text-slate-800">{plan.destination}</h3>
+                                <p className="text-sm text-slate-400 mt-1">{plan.days} 天 · {plan.summary}</p>
+                            </div>
+
+                            {/* 行李清單 */}
+                            <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                <h4 className="text-sm font-bold text-slate-400 mb-3">🎒 行李清單</h4>
+                                <div className="flex flex-wrap gap-2">
+                                    {(plan.packingList || []).map((item, i) => (
+                                        <span key={i} className="bg-sky-50 text-sky-600 text-xs font-bold px-3 py-1.5 rounded-full">
+                                            {item}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* 每日行程 */}
+                            {(plan.itinerary || []).map((day, i) => (
+                                <div key={i} className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <span className="w-8 h-8 bg-sky-100 text-sky-600 rounded-full flex items-center justify-center text-sm font-bold">
+                                            {day.day}
+                                        </span>
+                                        <h4 className="font-bold text-slate-700">{day.title}</h4>
+                                    </div>
+                                    <div className="space-y-3 ml-4 border-l-2 border-sky-100 pl-4">
+                                        {(day.activities || []).map((act, j) => (
+                                            <div key={j}>
+                                                <div className="text-xs font-bold text-sky-500">{act.time}</div>
+                                                <div className="text-sm font-bold text-slate-700">{act.activity}</div>
+                                                {act.tip && <div className="text-xs text-slate-400 mt-0.5">💡 {act.tip}</div>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+
+                            {/* 注意事項 */}
+                            {(plan.warnings || []).length > 0 && (
+                                <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4">
+                                    <h4 className="text-sm font-bold text-amber-600 mb-2">⚠️ 注意事項</h4>
+                                    <ul className="space-y-1">
+                                        {plan.warnings.map((w, i) => (
+                                            <li key={i} className="text-xs text-amber-700">· {w}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+
+                            {/* 大白寄語 */}
+                            <div className="bg-slate-800 text-white p-6 rounded-[2rem]">
+                                <BaymaxEyes />
+                                <p className="text-lg font-medium leading-relaxed mt-3">"{plan.baymaxTip}"</p>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // 列表頁 / 新增頁
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-sky-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="旅行助手" bgClass="bg-sky-50/90">
+                        {viewMode === 'list' && (
+                            <button onClick={() => setViewMode('add')}
+                                className="w-10 h-10 bg-sky-500 rounded-full flex items-center justify-center text-white shadow-lg shadow-sky-200 hover:scale-105 active:scale-95 transition">
+                                <Icons.Plus size={20} />
+                            </button>
+                        )}
+                    </PageHeader>
+
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar pb-safe-bottom">
+                        {viewMode === 'list' ? (
+                            <div className="space-y-4">
+                                {plans.length === 0 && (
+                                    <div className="text-center py-20 text-slate-300">
+                                        <Icons.MapPin size={48} className="mx-auto mb-4 opacity-30" />
+                                        <p className="text-slate-400">還沒有旅行計劃</p>
+                                        <p className="text-xs text-slate-300 mt-1">點右上角 + 開始規劃</p>
+                                    </div>
+                                )}
+                                {plans.map(plan => (
+                                    <div key={plan.id}
+                                        onClick={() => { setSelectedId(plan.id); setViewMode('detail'); }}
+                                        className="bg-white rounded-2xl p-5 shadow-soft cursor-pointer active:scale-[0.98] transition group">
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <h3 className="font-bold text-lg text-slate-800">✈️ {plan.destination}</h3>
+                                                <p className="text-xs text-slate-400 mt-1">{plan.days} 天 · {plan.createdAt}</p>
+                                                <p className="text-sm text-slate-500 mt-2 line-clamp-1">{plan.summary}</p>
+                                            </div>
+                                            <button onClick={(e) => { e.stopPropagation(); handleDelete(plan.id); }}
+                                                className="text-slate-200 hover:text-rose-500 p-1 opacity-0 group-hover:opacity-100 transition">
+                                                <Icons.Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="space-y-4 animate-fade-in">
+                                <div className="bg-white rounded-[2rem] p-6 shadow-soft">
+                                    <div className="text-center mb-4">
+                                        <div className="text-4xl mb-2">🗺️</div>
+                                        <h3 className="text-lg font-bold text-slate-700">規劃新旅程</h3>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="text-xs text-slate-400 font-bold ml-1">目的地</label>
+                                            <input autoFocus value={newTrip.destination}
+                                                onChange={e => setNewTrip({ ...newTrip, destination: e.target.value })}
+                                                placeholder="例如：東京、峇里島、巴黎..."
+                                                className="w-full bg-slate-50 p-3 rounded-xl mt-1 outline-none focus:ring-2 focus:ring-sky-100 text-sm" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-slate-400 font-bold ml-1">天數</label>
+                                            <div className="flex gap-2 mt-1">
+                                                {['2', '3', '5', '7', '10'].map(d => (
+                                                    <button key={d} onClick={() => setNewTrip({ ...newTrip, days: d })}
+                                                        className={`flex-1 py-2 rounded-xl text-sm font-bold transition ${
+                                                            newTrip.days === d ? 'bg-sky-100 text-sky-600 ring-2 ring-sky-300' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'
+                                                        }`}>
+                                                        {d}天
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-slate-400 font-bold ml-1 mb-2 block">旅行風格（選填）</label>
+                                            <div className="flex flex-wrap gap-2">
+                                                {travelStyles.map(s => (
+                                                    <button key={s.label}
+                                                        onClick={() => setNewTrip({ ...newTrip, style: newTrip.style === s.label ? '' : s.label })}
+                                                        className={`text-xs font-bold px-3 py-1.5 rounded-full transition ${
+                                                            newTrip.style === s.label
+                                                                ? 'bg-sky-100 text-sky-600 ring-2 ring-sky-300'
+                                                                : 'bg-slate-50 text-slate-400 hover:bg-slate-100'
+                                                        }`}>
+                                                        {s.icon} {s.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={() => setViewMode('list')}
+                                        className="flex-1 py-4 bg-white text-slate-400 rounded-2xl font-bold shadow-soft">取消</button>
+                                    <button onClick={handleGenerate} disabled={loading}
+                                        className="flex-1 py-4 bg-sky-500 text-white rounded-2xl font-bold hover:bg-sky-600 disabled:opacity-50 shadow-lg shadow-sky-200 transition">
+                                        {loading ? "大白規劃中..." : "產生行程"}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 工具 13: 翻譯器 (Translator)
+        // ==========================================
+        function ToolTranslator({ onBack }) {
+            const [input, setInput] = useState('');
+            const [image, setImage] = useState(null);
+            const [result, setResult] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [sourceLang, setSourceLang] = useState('auto');
+            const [targetLang, setTargetLang] = useState('zh-TW');
+
+            useEffect(() => {
+                return () => { if (image) URL.revokeObjectURL(image.preview); };
+            }, [image]);
+
+            const languages = [
+                { code: 'auto', label: '自動偵測' },
+                { code: 'zh-TW', label: '繁體中文' },
+                { code: 'zh-CN', label: '簡體中文' },
+                { code: 'en', label: 'English' },
+                { code: 'ja', label: '日本語' },
+                { code: 'ko', label: '한국어' },
+                { code: 'fr', label: 'Français' },
+                { code: 'de', label: 'Deutsch' },
+                { code: 'es', label: 'Español' },
+                { code: 'th', label: 'ไทย' },
+            ];
+
+            const targetLanguages = languages.filter(l => l.code !== 'auto');
+
+            const handleFile = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    if (image) URL.revokeObjectURL(image.preview);
+                    setImage({ file, preview: URL.createObjectURL(file) });
+                }
+            };
+
+            const speak = (text, lang) => {
+                if (!('speechSynthesis' in window) || !text) return;
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance(text);
+                u.lang = lang === 'zh-TW' ? 'zh-TW' : lang === 'zh-CN' ? 'zh-CN' : lang === 'ja' ? 'ja-JP' : lang === 'ko' ? 'ko-KR' : lang;
+                u.rate = 0.85;
+                window.speechSynthesis.speak(u);
+            };
+
+            const handleTranslate = async () => {
+                if (!input.trim() && !image) return;
+                setLoading(true);
+                try {
+                    const parts = [];
+                    if (image) {
+                        const imgData = await fileToBase64(image.file);
+                        parts.push({ inlineData: { data: imgData, mimeType: image.file.type } });
+                    }
+
+                    const sourceLabel = languages.find(l => l.code === sourceLang)?.label || '自動偵測';
+                    const targetLabel = languages.find(l => l.code === targetLang)?.label || '繁體中文';
+                    const textContent = input.trim() || "請翻譯圖片中的文字";
+                    parts.push({ text: textContent });
+
+                    const prompt = `你是大白翻譯助手。將以下內容從 ${sourceLabel} 翻譯成 ${targetLabel}。
+如果來源語言是「自動偵測」，請先判斷來源語言。
+如果有圖片，請先辨識圖中文字再翻譯。
+JSON結構: {
+    "detectedLang": "String (偵測到的來源語言名稱)",
+    "originalText": "String (原文，若來自圖片則為辨識結果)",
+    "translatedText": "String (翻譯結果)",
+    "pronunciation": "String (翻譯結果的拼音/羅馬字發音指引)",
+    "phrases": [{ "original": "String", "translated": "String", "note": "String" }]
+}`;
+                    const data = await callGemini(parts, prompt);
+                    setResult(data);
+                } catch (e) { /* callGemini 已處理 */ }
+                setLoading(false);
+            };
+
+            const swapLangs = () => {
+                if (sourceLang === 'auto') return;
+                const tmp = sourceLang;
+                setSourceLang(targetLang);
+                setTargetLang(tmp);
+            };
+
+            const reset = () => {
+                if (image) URL.revokeObjectURL(image.preview);
+                setInput('');
+                setImage(null);
+                setResult(null);
+            };
+
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-violet-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="翻譯器" bgClass="bg-violet-50/90" />
+
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar pb-safe-bottom">
+                        {/* 語言選擇列 */}
+                        <div className="bg-white rounded-2xl p-3 shadow-soft mb-4 flex items-center gap-2">
+                            <select value={sourceLang} onChange={e => setSourceLang(e.target.value)}
+                                className="flex-1 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold text-slate-600 outline-none appearance-none text-center cursor-pointer">
+                                {languages.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                            </select>
+                            <button onClick={swapLangs}
+                                className={`w-8 h-8 rounded-full flex items-center justify-center text-sm transition ${
+                                    sourceLang === 'auto' ? 'text-slate-200 cursor-not-allowed' : 'bg-violet-100 text-violet-500 hover:bg-violet-200 active:scale-90'
+                                }`}>
+                                ⇄
+                            </button>
+                            <select value={targetLang} onChange={e => setTargetLang(e.target.value)}
+                                className="flex-1 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold text-slate-600 outline-none appearance-none text-center cursor-pointer">
+                                {targetLanguages.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                            </select>
+                        </div>
+
+                        {/* 輸入區 */}
+                        <div className="bg-white rounded-[2rem] p-5 shadow-soft mb-4">
+                            <textarea
+                                value={input}
+                                onChange={e => setInput(e.target.value)}
+                                placeholder="輸入要翻譯的文字..."
+                                className="w-full bg-transparent outline-none resize-none h-28 text-sm placeholder-slate-300"
+                            />
+                            <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-50">
+                                {image ? (
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-10 h-10 rounded-lg overflow-hidden">
+                                            <img src={image.preview} className="w-full h-full object-cover" />
+                                        </div>
+                                        <button onClick={() => { URL.revokeObjectURL(image.preview); setImage(null); }}
+                                            className="text-slate-300 hover:text-rose-500">
+                                            <Icons.X size={14} />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <label className="flex items-center gap-1 text-slate-300 hover:text-violet-400 cursor-pointer transition">
+                                        <input type="file" accept="image/*" onChange={handleFile} className="hidden" />
+                                        <Icons.Camera size={16} />
+                                        <span className="text-xs">拍照翻譯</span>
+                                    </label>
+                                )}
+                                <button onClick={handleTranslate}
+                                    disabled={loading || (!input.trim() && !image)}
+                                    className="bg-violet-500 text-white px-5 py-2 rounded-xl font-bold text-sm disabled:opacity-40 hover:bg-violet-600 transition shadow-lg shadow-violet-200 flex items-center gap-1">
+                                    {loading ? <><Spinner /> 翻譯中</> : <><Icons.Languages size={16} /> 翻譯</>}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* 翻譯結果 */}
+                        {result && (
+                            <div className="space-y-4 animate-slide-up">
+                                {/* 偵測語言 */}
+                                {result.detectedLang && (
+                                    <div className="text-center text-xs text-slate-400">
+                                        偵測到：<span className="font-bold text-violet-500">{result.detectedLang}</span>
+                                    </div>
+                                )}
+
+                                {/* 原文 */}
+                                {result.originalText && result.originalText !== input && (
+                                    <div className="bg-white rounded-2xl p-4 shadow-soft">
+                                        <div className="flex justify-between items-center mb-1">
+                                            <h4 className="text-xs font-bold text-slate-400">原文</h4>
+                                            <button onClick={() => speak(result.originalText, sourceLang === 'auto' ? 'en' : sourceLang)}
+                                                className="text-slate-300 hover:text-violet-500 transition text-xs">🔊</button>
+                                        </div>
+                                        <p className="text-sm text-slate-600">{result.originalText}</p>
+                                    </div>
+                                )}
+
+                                {/* 翻譯結果 */}
+                                <div className="bg-violet-500 text-white rounded-[2rem] p-5 shadow-lg shadow-violet-200">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <h4 className="text-xs font-bold text-violet-200">翻譯結果</h4>
+                                        <button onClick={() => speak(result.translatedText, targetLang)}
+                                            className="text-violet-200 hover:text-white transition text-sm">🔊</button>
+                                    </div>
+                                    <p className="text-lg font-bold leading-relaxed">{result.translatedText}</p>
+                                    {result.pronunciation && (
+                                        <p className="text-xs text-violet-200 mt-2 italic">{result.pronunciation}</p>
+                                    )}
+                                </div>
+
+                                {/* 重點片語 */}
+                                {(result.phrases || []).length > 0 && (
+                                    <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                        <h4 className="text-xs font-bold text-slate-400 mb-3">重點片語</h4>
+                                        <div className="space-y-2">
+                                            {result.phrases.map((p, i) => (
+                                                <div key={i} className="flex items-start gap-3 bg-slate-50 p-3 rounded-xl">
+                                                    <div className="flex-1">
+                                                        <div className="text-sm font-bold text-slate-700">{p.original}</div>
+                                                        <div className="text-sm text-violet-500">{p.translated}</div>
+                                                    </div>
+                                                    {p.note && <div className="text-[10px] text-slate-400 max-w-[100px]">{p.note}</div>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                <button onClick={reset} className="w-full py-4 text-slate-400 font-bold">
+                                    再翻一次
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
         // 主程式：Baymax OS
         // ==========================================
         function App() {
@@ -2574,7 +3032,8 @@ JSON結構: {
                 { id: 'habit', name: '習慣追蹤', icon: <Icons.CheckSquare size={28} />, desc: '每日打卡' },
                 { id: 'expense', name: '記帳本', icon: <Icons.Wallet size={28} />, desc: '支出管理' },
                 { id: 'firstaid', name: '急救指南', icon: <Icons.HeartPulse size={28} />, desc: '初步急救建議' },
-                { id: 'coming', name: '擴充槽', icon: <Icons.Plus size={24} />, desc: '空置' },
+                { id: 'travel', name: '旅行助手', icon: <Icons.MapPin size={28} />, desc: '行程規劃' },
+                { id: 'translator', name: '翻譯器', icon: <Icons.Languages size={28} />, desc: '多語翻譯' },
             ];
 
             const toolComponents = {
@@ -2589,6 +3048,8 @@ JSON結構: {
                 habit: ToolHabit,
                 expense: ToolExpense,
                 firstaid: ToolFirstAid,
+                travel: ToolTravel,
+                translator: ToolTranslator,
             };
 
             const goHome = useCallback(() => setView('home'), []);
