@@ -355,6 +355,37 @@
                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                 </svg>
             ),
+            // 新增功能用 Icons
+            UtensilsCrossed: (p) => (
+                <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m16 2-2.3 2.3a3 3 0 0 0 0 4.2l1.8 1.8a3 3 0 0 0 4.2 0L22 8"/>
+                    <path d="M15 15 3.3 3.3a4.2 4.2 0 0 0 0 6l7.3 7.3c1.7 1.7 4.3 1.7 6 0"/>
+                    <path d="m2 2 20 20"/>
+                </svg>
+            ),
+            CheckSquare: (p) => (
+                <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="9 11 12 14 22 4"/>
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                </svg>
+            ),
+            Wallet: (p) => (
+                <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/>
+                    <path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/>
+                    <path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/>
+                </svg>
+            ),
+            HeartPulse: (p) => (
+                <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>
+                    <path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/>
+                </svg>
+            ),
         };
         // PenLine 與 Edit3 完全相同，統一使用 Edit3
         Icons.PenLine = Icons.Edit3;
@@ -1770,6 +1801,762 @@
         }
 
         // ==========================================
+        // 工具 8: 食譜助手 (Recipe Helper)
+        // ==========================================
+        function ToolRecipe({ onBack }) {
+            const [step, setStep] = useState('idle');
+            const [images, setImages] = useState([]);
+            const [textInput, setTextInput] = useState('');
+            const [result, setResult] = useState(null);
+            const [loadingTip, setLoadingTip] = useState("辨識食材中...");
+
+            useEffect(() => {
+                return () => images.forEach(img => URL.revokeObjectURL(img.preview));
+            }, [images]);
+
+            useEffect(() => {
+                if (step === 'analyzing') {
+                    const tips = ["辨識食材中...", "大白正在想菜色...", "搜尋最佳配方..."];
+                    let i = 0;
+                    const id = setInterval(() => setLoadingTip(tips[i++ % tips.length]), 2000);
+                    return () => clearInterval(id);
+                }
+            }, [step]);
+
+            const handleAnalyze = async () => {
+                if (!images.length && !textInput.trim()) return;
+                setStep('analyzing');
+                try {
+                    const parts = [];
+                    if (images.length) {
+                        const imgParts = await Promise.all(
+                            images.map(async (img) => ({
+                                inlineData: { data: await fileToBase64(img.file), mimeType: img.file.type }
+                            }))
+                        );
+                        parts.push(...imgParts);
+                    }
+                    const userText = textInput.trim()
+                        ? `這些是我有的食材: ${textInput}。請推薦菜色。`
+                        : "請辨識圖中的食材，並推薦可做的菜色。";
+                    parts.push({ text: userText });
+
+                    const prompt = `你是大白，一個貼心的烹飪助手。根據使用者提供的食材（圖片或文字），推薦 2-3 道容易製作的菜色。
+JSON結構: { "ingredients": ["String"], "recipes": [{ "name": "String", "difficulty": "簡單|中等|進階", "time": "String", "steps": ["String"], "tip": "String" }] }`;
+                    const data = await callGemini(parts, prompt);
+                    setResult(data);
+                    setStep('result');
+                } catch (e) {
+                    alert("分析失敗，請重試");
+                    setStep('idle');
+                }
+            };
+
+            const handleFile = (e) => {
+                if (e.target.files.length) {
+                    const newImgs = Array.from(e.target.files).map(f => ({
+                        file: f, preview: URL.createObjectURL(f)
+                    }));
+                    setImages(prev => [...prev, ...newImgs]);
+                }
+            };
+
+            const removeImage = (index) => {
+                setImages(prev => {
+                    URL.revokeObjectURL(prev[index].preview);
+                    return prev.filter((_, i) => i !== index);
+                });
+            };
+
+            const difficultyColor = (d) => {
+                if (d === '簡單') return 'bg-emerald-100 text-emerald-600';
+                if (d === '進階') return 'bg-rose-100 text-rose-600';
+                return 'bg-amber-100 text-amber-600';
+            };
+
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="食譜助手" />
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar pb-safe-bottom">
+                        {step === 'idle' && (
+                            <div className="space-y-4 flex flex-col h-full">
+                                <div className="bg-white rounded-[2rem] p-6 shadow-soft flex-1">
+                                    <p className="text-sm text-slate-400 mb-3 font-dot">拍攝食材或輸入名稱，大白幫你想菜色</p>
+                                    <div className="grid grid-cols-3 gap-2 mb-4">
+                                        {images.map((img, i) => (
+                                            <div key={i} className="relative aspect-square rounded-xl overflow-hidden shadow-inner">
+                                                <img src={img.preview} className="w-full h-full object-cover" />
+                                                <button onClick={() => removeImage(i)} className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-0.5">
+                                                    <Icons.X size={10} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                        <label className="aspect-square flex flex-col items-center justify-center bg-slate-50 rounded-xl cursor-pointer hover:bg-slate-100 transition border-2 border-dashed border-slate-200">
+                                            <input type="file" multiple accept="image/*" onChange={handleFile} className="hidden" />
+                                            <Icons.Camera className="text-slate-300" size={20} />
+                                            <span className="text-[10px] text-slate-300 mt-1">拍食材</span>
+                                        </label>
+                                    </div>
+                                    <div className="flex items-center gap-2 text-xs text-slate-300 mb-2">
+                                        <div className="flex-1 h-px bg-slate-100"></div>
+                                        <span>或直接輸入</span>
+                                        <div className="flex-1 h-px bg-slate-100"></div>
+                                    </div>
+                                    <textarea
+                                        value={textInput}
+                                        onChange={e => setTextInput(e.target.value)}
+                                        placeholder="例如：雞蛋、番茄、洋蔥..."
+                                        className="w-full bg-slate-50 rounded-xl p-3 outline-none resize-none h-20 text-sm placeholder-slate-300 focus:ring-2 focus:ring-orange-100 transition"
+                                    />
+                                </div>
+                                <button
+                                    onClick={handleAnalyze}
+                                    disabled={!images.length && !textInput.trim()}
+                                    className="w-full bg-orange-500 text-white py-4 rounded-2xl font-bold shadow-lg shadow-orange-200 disabled:opacity-40 hover:bg-orange-600 transition"
+                                >
+                                    讓大白推薦菜色
+                                </button>
+                            </div>
+                        )}
+
+                        {step === 'analyzing' && (
+                            <div className="h-full flex flex-col items-center justify-center">
+                                <Icons.UtensilsCrossed className="text-orange-400 w-10 h-10 animate-bounce" />
+                                <p className="mt-4 text-slate-400">{loadingTip}</p>
+                            </div>
+                        )}
+
+                        {step === 'result' && result && (
+                            <div className="space-y-4 animate-slide-up">
+                                {/* 食材清單 */}
+                                <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                    <h3 className="text-sm font-bold text-slate-400 mb-2">辨識到的食材</h3>
+                                    <div className="flex flex-wrap gap-2">
+                                        {(result.ingredients || []).map((item, i) => (
+                                            <span key={i} className="bg-orange-50 text-orange-600 text-xs font-bold px-3 py-1 rounded-full">
+                                                {item}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* 推薦菜色 */}
+                                {(result.recipes || []).map((recipe, i) => (
+                                    <div key={i} className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                        <div className="flex justify-between items-start mb-3">
+                                            <h3 className="text-xl font-black text-slate-800">{recipe.name}</h3>
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${difficultyColor(recipe.difficulty)}`}>
+                                                {recipe.difficulty}
+                                            </span>
+                                        </div>
+                                        <p className="text-xs text-slate-400 mb-3">⏱ {recipe.time}</p>
+                                        <ol className="space-y-2 mb-3">
+                                            {recipe.steps.map((s, j) => (
+                                                <li key={j} className="flex gap-2 text-sm text-slate-600">
+                                                    <span className="w-5 h-5 bg-orange-100 text-orange-500 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+                                                        {j + 1}
+                                                    </span>
+                                                    {s}
+                                                </li>
+                                            ))}
+                                        </ol>
+                                        {recipe.tip && (
+                                            <div className="bg-slate-50 p-3 rounded-xl text-xs text-slate-500">
+                                                💡 大白提醒：{recipe.tip}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+
+                                <button onClick={() => { setStep('idle'); setImages([]); setTextInput(''); setResult(null); }}
+                                    className="w-full py-4 text-slate-400 font-bold">
+                                    再試其他食材
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 工具 9: 習慣追蹤 (Habit Tracker)
+        // ==========================================
+        function ToolHabit({ onBack }) {
+            const [habits, setHabits] = useLocalStorage('baymax_habits', []);
+            const [showAdd, setShowAdd] = useState(false);
+            const [newName, setNewName] = useState('');
+            const [newIcon, setNewIcon] = useState('💧');
+
+            const today = new Date().toISOString().split('T')[0];
+
+            const presetIcons = ['💧', '🏃', '📖', '🧘', '💊', '🥗', '😴', '✍️', '🎵', '🧹'];
+
+            const addHabit = () => {
+                if (!newName.trim()) return;
+                setHabits(prev => [...prev, {
+                    id: Date.now(),
+                    name: newName.trim(),
+                    icon: newIcon,
+                    records: [],
+                    createdAt: today,
+                }]);
+                setNewName('');
+                setNewIcon('💧');
+                setShowAdd(false);
+            };
+
+            const toggleToday = (habitId) => {
+                setHabits(prev => prev.map(h => {
+                    if (h.id !== habitId) return h;
+                    const hasToday = h.records.includes(today);
+                    return {
+                        ...h,
+                        records: hasToday
+                            ? h.records.filter(d => d !== today)
+                            : [...h.records, today]
+                    };
+                }));
+            };
+
+            const deleteHabit = (id) => {
+                if (confirm("確定刪除這個習慣？")) {
+                    setHabits(prev => prev.filter(h => h.id !== id));
+                }
+            };
+
+            const getStreak = (records) => {
+                if (!records.length) return 0;
+                const sorted = [...records].sort().reverse();
+                let streak = 0;
+                const d = new Date();
+                for (let i = 0; i < 365; i++) {
+                    const dateStr = d.toISOString().split('T')[0];
+                    if (sorted.includes(dateStr)) {
+                        streak++;
+                    } else if (i > 0) {
+                        break;
+                    }
+                    d.setDate(d.getDate() - 1);
+                }
+                return streak;
+            };
+
+            // 最近 7 天
+            const last7Days = Array.from({ length: 7 }, (_, i) => {
+                const d = new Date();
+                d.setDate(d.getDate() - (6 - i));
+                return {
+                    date: d.toISOString().split('T')[0],
+                    label: ['日', '一', '二', '三', '四', '五', '六'][d.getDay()],
+                    isToday: d.toISOString().split('T')[0] === today,
+                };
+            });
+
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="習慣追蹤">
+                        <button
+                            onClick={() => setShowAdd(!showAdd)}
+                            className="w-10 h-10 bg-emerald-500 rounded-full flex items-center justify-center text-white shadow-lg shadow-emerald-200 hover:scale-105 active:scale-95 transition"
+                        >
+                            <Icons.Plus size={20} />
+                        </button>
+                    </PageHeader>
+
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar pb-safe-bottom">
+                        {/* 新增習慣面板 */}
+                        {showAdd && (
+                            <div className="bg-white rounded-[2rem] p-5 shadow-soft mb-4 animate-fade-in">
+                                <h3 className="text-sm font-bold text-slate-400 mb-3">新增習慣</h3>
+                                <div className="flex flex-wrap gap-2 mb-3">
+                                    {presetIcons.map(icon => (
+                                        <button
+                                            key={icon}
+                                            onClick={() => setNewIcon(icon)}
+                                            className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg transition ${
+                                                newIcon === icon ? 'bg-emerald-100 ring-2 ring-emerald-400 scale-110' : 'bg-slate-50 hover:bg-slate-100'
+                                            }`}
+                                        >
+                                            {icon}
+                                        </button>
+                                    ))}
+                                </div>
+                                <input
+                                    value={newName}
+                                    onChange={e => setNewName(e.target.value)}
+                                    onKeyDown={e => e.key === 'Enter' && addHabit()}
+                                    placeholder="習慣名稱，例如：每天喝 8 杯水"
+                                    className="w-full bg-slate-50 p-3 rounded-xl outline-none text-sm mb-3 focus:ring-2 focus:ring-emerald-100"
+                                />
+                                <button
+                                    onClick={addHabit}
+                                    disabled={!newName.trim()}
+                                    className="w-full bg-emerald-500 text-white py-3 rounded-xl font-bold disabled:opacity-40 hover:bg-emerald-600 transition"
+                                >
+                                    加入
+                                </button>
+                            </div>
+                        )}
+
+                        {/* 習慣列表 */}
+                        {habits.length === 0 && !showAdd && (
+                            <div className="text-center py-20 text-slate-300">
+                                <Icons.CheckSquare size={48} className="mx-auto mb-4 opacity-30" />
+                                <p className="text-slate-400">還沒有習慣，點右上角 + 開始</p>
+                            </div>
+                        )}
+
+                        <div className="space-y-4">
+                            {habits.map(habit => {
+                                const doneToday = habit.records.includes(today);
+                                const streak = getStreak(habit.records);
+
+                                return (
+                                    <div key={habit.id} className="bg-white rounded-[2rem] p-5 shadow-soft relative group">
+                                        <button
+                                            onClick={() => deleteHabit(habit.id)}
+                                            className="absolute top-4 right-4 text-slate-200 hover:text-rose-500 transition opacity-0 group-hover:opacity-100"
+                                        >
+                                            <Icons.Trash2 size={14} />
+                                        </button>
+
+                                        {/* 標題列 */}
+                                        <div className="flex items-center gap-3 mb-3">
+                                            <button
+                                                onClick={() => toggleToday(habit.id)}
+                                                className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl transition-all active:scale-90 ${
+                                                    doneToday
+                                                        ? 'bg-emerald-100 ring-2 ring-emerald-400 shadow-lg shadow-emerald-100'
+                                                        : 'bg-slate-50 hover:bg-slate-100'
+                                                }`}
+                                            >
+                                                {doneToday ? '✅' : habit.icon}
+                                            </button>
+                                            <div className="flex-1">
+                                                <div className="font-bold text-slate-700">{habit.name}</div>
+                                                <div className="text-xs text-slate-400">
+                                                    {streak > 0
+                                                        ? `🔥 連續 ${streak} 天`
+                                                        : '今天開始吧！'
+                                                    }
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* 最近 7 天格子 */}
+                                        <div className="flex gap-1.5">
+                                            {last7Days.map(day => {
+                                                const done = habit.records.includes(day.date);
+                                                return (
+                                                    <div key={day.date} className="flex-1 flex flex-col items-center gap-1">
+                                                        <div className={`w-full aspect-square rounded-lg flex items-center justify-center text-xs font-bold transition ${
+                                                            done
+                                                                ? 'bg-emerald-400 text-white'
+                                                                : day.isToday
+                                                                    ? 'bg-slate-100 text-slate-400 ring-1 ring-slate-300'
+                                                                    : 'bg-slate-50 text-slate-200'
+                                                        }`}>
+                                                            {done ? '✓' : ''}
+                                                        </div>
+                                                        <span className={`text-[10px] ${day.isToday ? 'text-emerald-500 font-bold' : 'text-slate-300'}`}>
+                                                            {day.label}
+                                                        </span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 工具 10: 記帳本 (Expense Tracker)
+        // ==========================================
+        function ToolExpense({ onBack }) {
+            const [records, setRecords] = useLocalStorage('baymax_expenses', []);
+            const [viewMode, setViewMode] = useState('list');
+            const [newEntry, setNewEntry] = useState({ item: '', amount: '', category: '' });
+            const [loading, setLoading] = useState(false);
+
+            const categoryConfig = {
+                '餐飲': { color: 'bg-orange-100 text-orange-600', icon: '🍔' },
+                '交通': { color: 'bg-blue-100 text-blue-600', icon: '🚌' },
+                '娛樂': { color: 'bg-purple-100 text-purple-600', icon: '🎮' },
+                '購物': { color: 'bg-pink-100 text-pink-600', icon: '🛍️' },
+                '醫療': { color: 'bg-red-100 text-red-600', icon: '💊' },
+                '教育': { color: 'bg-indigo-100 text-indigo-600', icon: '📚' },
+                '日用': { color: 'bg-teal-100 text-teal-600', icon: '🏠' },
+                '其他': { color: 'bg-gray-100 text-gray-500', icon: '📌' },
+            };
+
+            const handleAdd = async () => {
+                if (!newEntry.item || !newEntry.amount) {
+                    return alert("請填寫項目和金額");
+                }
+                setLoading(true);
+                let category = newEntry.category;
+                if (!category) {
+                    try {
+                        const aiData = await callGemini(
+                            [{ text: newEntry.item }],
+                            `將消費項目 "${newEntry.item}" 分類為以下其中一個: 餐飲/交通/娛樂/購物/醫療/教育/日用/其他。JSON: { "category": "String" }`
+                        );
+                        category = aiData.category || '其他';
+                    } catch (e) {
+                        category = '其他';
+                    }
+                }
+                setRecords(prev => [{
+                    id: Date.now(),
+                    item: newEntry.item,
+                    amount: parseFloat(newEntry.amount),
+                    category,
+                    date: new Date().toISOString().split('T')[0],
+                }, ...prev]);
+                setNewEntry({ item: '', amount: '', category: '' });
+                setViewMode('list');
+                setLoading(false);
+            };
+
+            const handleDelete = (id) => {
+                if (confirm("刪除此筆記錄？")) {
+                    setRecords(prev => prev.filter(r => r.id !== id));
+                }
+            };
+
+            // 本月統計
+            const thisMonth = new Date().toISOString().slice(0, 7);
+            const monthRecords = records.filter(r => r.date?.startsWith(thisMonth));
+            const monthTotal = monthRecords.reduce((sum, r) => sum + (r.amount || 0), 0);
+
+            // 分類統計
+            const categoryTotals = {};
+            monthRecords.forEach(r => {
+                const cat = r.category || '其他';
+                categoryTotals[cat] = (categoryTotals[cat] || 0) + (r.amount || 0);
+            });
+            const sortedCategories = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1]);
+
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="記帳本">
+                        {viewMode === 'list' && (
+                            <button
+                                onClick={() => setViewMode('add')}
+                                className="w-10 h-10 bg-teal-500 rounded-full flex items-center justify-center text-white shadow-lg shadow-teal-200 hover:scale-105 active:scale-95 transition"
+                            >
+                                <Icons.Plus size={20} />
+                            </button>
+                        )}
+                    </PageHeader>
+
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar pb-safe-bottom">
+                        {viewMode === 'list' ? (
+                            <div className="space-y-4">
+                                {/* 本月總覽 */}
+                                <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                    <h3 className="text-xs font-bold text-slate-400 mb-1">本月支出</h3>
+                                    <div className="text-3xl font-black text-slate-800">${monthTotal.toLocaleString()}</div>
+
+                                    {sortedCategories.length > 0 && (
+                                        <div className="mt-4 space-y-2">
+                                            {sortedCategories.map(([cat, total]) => {
+                                                const cfg = categoryConfig[cat] || categoryConfig['其他'];
+                                                const pct = monthTotal > 0 ? Math.round((total / monthTotal) * 100) : 0;
+                                                return (
+                                                    <div key={cat} className="flex items-center gap-2">
+                                                        <span className="text-sm">{cfg.icon}</span>
+                                                        <span className="text-xs text-slate-500 w-10">{cat}</span>
+                                                        <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                            <div
+                                                                className="h-full bg-teal-400 rounded-full transition-all duration-500"
+                                                                style={{ width: `${pct}%` }}
+                                                            ></div>
+                                                        </div>
+                                                        <span className="text-xs text-slate-400 w-16 text-right">${total.toLocaleString()}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* 記錄列表 */}
+                                {records.length === 0 && (
+                                    <div className="text-center py-16 text-slate-300">
+                                        <Icons.Wallet size={48} className="mx-auto mb-4 opacity-30" />
+                                        <p className="text-slate-400">還沒有記錄，點右上角 + 開始記帳</p>
+                                    </div>
+                                )}
+                                {records.map(item => {
+                                    const cfg = categoryConfig[item.category] || categoryConfig['其他'];
+                                    return (
+                                        <div key={item.id} className="bg-white rounded-2xl p-4 shadow-soft flex items-center gap-3 group">
+                                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg ${cfg.color}`}>
+                                                {cfg.icon}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="font-bold text-slate-700 truncate">{item.item}</div>
+                                                <div className="text-xs text-slate-400">{item.date}</div>
+                                            </div>
+                                            <div className="text-right">
+                                                <div className="font-bold text-slate-800">${item.amount?.toLocaleString()}</div>
+                                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${cfg.color}`}>
+                                                    {item.category}
+                                                </span>
+                                            </div>
+                                            <button
+                                                onClick={() => handleDelete(item.id)}
+                                                className="text-slate-200 hover:text-rose-500 transition opacity-0 group-hover:opacity-100 ml-1"
+                                            >
+                                                <Icons.Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <div className="space-y-4 animate-fade-in">
+                                <div className="bg-white rounded-[2rem] p-6 shadow-soft">
+                                    <h3 className="text-lg font-bold text-slate-700 mb-4">新增支出</h3>
+                                    <div className="space-y-3">
+                                        <div>
+                                            <label className="text-xs text-slate-400 font-bold ml-1">項目</label>
+                                            <input
+                                                autoFocus
+                                                value={newEntry.item}
+                                                onChange={e => setNewEntry({ ...newEntry, item: e.target.value })}
+                                                placeholder="例如：午餐便當"
+                                                className="w-full bg-slate-50 p-3 rounded-xl mt-1 outline-none focus:ring-2 focus:ring-teal-100 text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-slate-400 font-bold ml-1">金額</label>
+                                            <input
+                                                type="number"
+                                                value={newEntry.amount}
+                                                onChange={e => setNewEntry({ ...newEntry, amount: e.target.value })}
+                                                placeholder="0"
+                                                className="w-full bg-slate-50 p-3 rounded-xl mt-1 outline-none focus:ring-2 focus:ring-teal-100 text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-slate-400 font-bold ml-1 mb-2 block">分類 (留空自動判斷)</label>
+                                            <div className="flex flex-wrap gap-2">
+                                                {Object.entries(categoryConfig).map(([cat, cfg]) => (
+                                                    <button
+                                                        key={cat}
+                                                        onClick={() => setNewEntry({ ...newEntry, category: newEntry.category === cat ? '' : cat })}
+                                                        className={`text-xs font-bold px-3 py-1.5 rounded-full transition ${
+                                                            newEntry.category === cat
+                                                                ? 'ring-2 ring-teal-400 ' + cfg.color
+                                                                : cfg.color + ' opacity-50 hover:opacity-80'
+                                                        }`}
+                                                    >
+                                                        {cfg.icon} {cat}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={() => setViewMode('list')}
+                                        className="flex-1 py-4 bg-white text-slate-400 rounded-2xl font-bold shadow-soft">
+                                        取消
+                                    </button>
+                                    <button
+                                        onClick={handleAdd}
+                                        disabled={loading}
+                                        className="flex-1 py-4 bg-teal-500 text-white rounded-2xl font-bold hover:bg-teal-600 disabled:opacity-50 shadow-lg shadow-teal-200 transition"
+                                    >
+                                        {loading ? "分類中..." : "記錄"}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 工具 11: 急救指南 (First Aid Guide)
+        // ==========================================
+        function ToolFirstAid({ onBack }) {
+            const [input, setInput] = useState('');
+            const [image, setImage] = useState(null);
+            const [result, setResult] = useState(null);
+            const [loading, setLoading] = useState(false);
+
+            useEffect(() => {
+                return () => { if (image) URL.revokeObjectURL(image.preview); };
+            }, [image]);
+
+            const handleFile = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    if (image) URL.revokeObjectURL(image.preview);
+                    setImage({ file, preview: URL.createObjectURL(file) });
+                }
+            };
+
+            const handleSubmit = async () => {
+                if (!input.trim() && !image) return;
+                setLoading(true);
+                try {
+                    const parts = [];
+                    if (image) {
+                        const imgData = await fileToBase64(image.file);
+                        parts.push({ inlineData: { data: imgData, mimeType: image.file.type } });
+                    }
+                    parts.push({ text: input.trim() || "請根據圖片判斷狀況並提供急救建議" });
+
+                    const prompt = `你是大白，一個專業的急救護理機器人。根據使用者描述的症狀或傷口圖片，提供初步急救指引。
+注意：你必須在回覆中強調這只是初步建議，嚴重情況請就醫。
+使用繁體中文回覆。
+JSON結構: {
+    "condition": "String (判斷的狀況名稱)",
+    "severity": "輕微|中等|嚴重",
+    "steps": [{ "step": "String", "detail": "String" }],
+    "warning": "String (何時需要就醫)",
+    "baymaxTip": "String (大白的溫馨關懷語)"
+}`;
+                    const data = await callGemini(parts, prompt);
+                    setResult(data);
+                } catch (e) { /* 錯誤已在 callGemini 處理 */ }
+                setLoading(false);
+            };
+
+            const severityColor = (s) => {
+                if (s === '輕微') return 'bg-emerald-100 text-emerald-600';
+                if (s === '嚴重') return 'bg-rose-100 text-rose-600';
+                return 'bg-amber-100 text-amber-600';
+            };
+
+            const reset = () => {
+                if (image) URL.revokeObjectURL(image.preview);
+                setInput('');
+                setImage(null);
+                setResult(null);
+            };
+
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="急救指南" />
+
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar pb-safe-bottom">
+                        {!result ? (
+                            <div className="space-y-4 flex flex-col h-full">
+                                {/* 免責聲明 */}
+                                <div className="bg-rose-50 border border-rose-100 rounded-2xl p-4 text-xs text-rose-400 leading-relaxed">
+                                    ⚠️ 本功能僅供參考，不能取代專業醫療建議。如遇緊急狀況請立即撥打 119。
+                                </div>
+
+                                <div className="bg-white rounded-[2rem] p-5 shadow-soft flex-1">
+                                    <p className="text-sm text-slate-400 mb-3 font-dot">描述症狀或拍攝傷口，大白為你分析</p>
+
+                                    <textarea
+                                        value={input}
+                                        onChange={e => setInput(e.target.value)}
+                                        placeholder="例如：手指被紙割傷，有少量出血..."
+                                        className="w-full bg-slate-50 rounded-xl p-3 outline-none resize-none h-28 text-sm placeholder-slate-300 focus:ring-2 focus:ring-rose-100 transition mb-3"
+                                    />
+
+                                    {image ? (
+                                        <div className="relative w-full h-40 rounded-xl overflow-hidden shadow-inner bg-slate-100 mb-2">
+                                            <img src={image.preview} className="w-full h-full object-contain" />
+                                            <button
+                                                onClick={() => { URL.revokeObjectURL(image.preview); setImage(null); }}
+                                                className="absolute top-2 right-2 bg-black/50 text-white rounded-full p-1"
+                                            >
+                                                <Icons.X size={14} />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <label className="w-full h-24 border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center cursor-pointer hover:bg-slate-50 transition gap-2">
+                                            <input type="file" accept="image/*" onChange={handleFile} className="hidden" />
+                                            <Icons.Camera className="text-slate-300" size={18} />
+                                            <span className="text-xs text-slate-300">拍攝傷口（選填）</span>
+                                        </label>
+                                    )}
+                                </div>
+
+                                <button
+                                    onClick={handleSubmit}
+                                    disabled={loading || (!input.trim() && !image)}
+                                    className="w-full bg-rose-500 text-white py-4 rounded-2xl font-bold shadow-lg shadow-rose-200 disabled:opacity-40 hover:bg-rose-600 transition flex items-center justify-center gap-2"
+                                >
+                                    {loading ? (
+                                        <><Spinner /> 大白分析中...</>
+                                    ) : (
+                                        <><Icons.HeartPulse size={20} /> 取得急救建議</>
+                                    )}
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="space-y-4 animate-slide-up">
+                                {/* 狀況判斷 */}
+                                <div className="bg-white rounded-[2rem] p-6 shadow-soft text-center">
+                                    <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                                        <Icons.HeartPulse size={32} className="text-rose-400" />
+                                    </div>
+                                    <h3 className="text-2xl font-black text-slate-800 mb-2">{result.condition}</h3>
+                                    <span className={`text-xs font-bold px-3 py-1 rounded-full ${severityColor(result.severity)}`}>
+                                        {result.severity}
+                                    </span>
+                                </div>
+
+                                {/* 急救步驟 */}
+                                <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                    <h4 className="text-sm font-bold text-slate-400 mb-3">急救步驟</h4>
+                                    <div className="space-y-3">
+                                        {(result.steps || []).map((s, i) => (
+                                            <div key={i} className="flex gap-3">
+                                                <div className="w-7 h-7 bg-rose-100 text-rose-500 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+                                                    {i + 1}
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-slate-700 text-sm">{s.step}</div>
+                                                    <div className="text-xs text-slate-400 mt-0.5">{s.detail}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* 就醫提醒 */}
+                                {result.warning && (
+                                    <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 text-sm text-amber-700">
+                                        🏥 <strong>何時就醫：</strong>{result.warning}
+                                    </div>
+                                )}
+
+                                {/* 大白寄語 */}
+                                <div className="bg-slate-800 text-white p-6 rounded-[2rem]">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <BaymaxEyes />
+                                    </div>
+                                    <p className="text-lg font-medium leading-relaxed mt-3">"{result.baymaxTip}"</p>
+                                </div>
+
+                                <button onClick={reset} className="w-full py-4 text-slate-400 font-bold">
+                                    再問一次
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
         // 主程式：Baymax OS
         // ==========================================
         function App() {
@@ -1783,6 +2570,10 @@
                 { id: 'password', name: '保險箱', icon: <Icons.Lock size={28} />, desc: '密碼管理' },
                 { id: 'movie', name: '影視庫', icon: <Icons.Film size={28} />, desc: '電影收藏' },
                 { id: 'pomodoro', name: '專注模式', icon: <Icons.Timer size={28} />, desc: '番茄鐘' },
+                { id: 'recipe', name: '食譜助手', icon: <Icons.UtensilsCrossed size={28} />, desc: '智能推薦菜色' },
+                { id: 'habit', name: '習慣追蹤', icon: <Icons.CheckSquare size={28} />, desc: '每日打卡' },
+                { id: 'expense', name: '記帳本', icon: <Icons.Wallet size={28} />, desc: '支出管理' },
+                { id: 'firstaid', name: '急救指南', icon: <Icons.HeartPulse size={28} />, desc: '初步急救建議' },
                 { id: 'coming', name: '擴充槽', icon: <Icons.Plus size={24} />, desc: '空置' },
             ];
 
@@ -1794,6 +2585,10 @@
                 password: ToolPassword,
                 movie: ToolMovie,
                 pomodoro: ToolPomodoro,
+                recipe: ToolRecipe,
+                habit: ToolHabit,
+                expense: ToolExpense,
+                firstaid: ToolFirstAid,
             };
 
             const goHome = useCallback(() => setView('home'), []);
