@@ -469,6 +469,23 @@
         };
         // PenLine 與 Edit3 完全相同，統一使用 Edit3
         Icons.PenLine = Icons.Edit3;
+        Icons.Droplets = (p) => (
+            <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M7 16.3c2.2 0 4-1.83 4-4.05 0-1.16-.57-2.26-1.71-3.19S7.29 6.75 7 5.3c-.29 1.45-1.14 2.84-2.29 3.76S3 11.1 3 12.25c0 2.22 1.8 4.05 4 4.05z"/>
+                <path d="M12.56 6.6A10.97 10.97 0 0 0 14 3.02c.5 2.5 2 4.9 4 6.5s3 3.5 3 5.5a6.98 6.98 0 0 1-11.91 4.97"/>
+            </svg>
+        );
+        Icons.FileText = (p) => (
+            <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" x2="8" y1="13" y2="13"/>
+                <line x1="16" x2="8" y1="17" y2="17"/>
+                <line x1="10" x2="8" y1="9" y2="9"/>
+            </svg>
+        );
 
         // ==========================================
         // 共用 UI 元件
@@ -3452,6 +3469,249 @@ JSON結構: {
         }
 
         // ==========================================
+        // 工具 15: 喝水提醒 (Water Tracker)
+        // ==========================================
+        function ToolWater({ onBack }) {
+            const TODAY = new Date().toISOString().split('T')[0];
+            const [log, setLog] = useLocalStorage('baymax_water', {});
+            const [goal, setGoal] = useState(() => parseInt(localStorage.getItem('baymax_water_goal') || '2000', 10));
+            const [customMl, setCustomMl] = useState('');
+            const [editingGoal, setEditingGoal] = useState(false);
+            const [goalInput, setGoalInput] = useState(String(goal));
+
+            const todayMl = log[TODAY] || 0;
+            const pct = Math.min(100, Math.round((todayMl / goal) * 100));
+
+            const add = (ml) => {
+                setLog(prev => ({ ...prev, [TODAY]: (prev[TODAY] || 0) + ml }));
+            };
+
+            const reset = () => {
+                if (confirm('重設今日飲水記錄？')) {
+                    setLog(prev => { const n = { ...prev }; delete n[TODAY]; return n; });
+                }
+            };
+
+            const saveGoal = () => {
+                const v = parseInt(goalInput, 10);
+                if (v > 0) {
+                    setGoal(v);
+                    localStorage.setItem('baymax_water_goal', String(v));
+                }
+                setEditingGoal(false);
+            };
+
+            const QUICK = [
+                { label: '一小杯', ml: 200 },
+                { label: '瓶裝水', ml: 350 },
+                { label: '大杯水', ml: 500 },
+            ];
+
+            // 顏色：依完成百分比
+            const ringColor = pct >= 100 ? '#10b981' : pct >= 60 ? '#3b82f6' : '#94a3b8';
+            const circumference = 2 * Math.PI * 54;
+            const dashOffset = circumference * (1 - pct / 100);
+
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="喝水提醒" />
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar space-y-4 pb-safe-bottom">
+
+                        {/* 進度圓環 */}
+                        <div className="bg-white rounded-[2rem] p-6 shadow-soft flex flex-col items-center">
+                            <div className="relative w-36 h-36 mb-4">
+                                <svg className="w-full h-full -rotate-90" viewBox="0 0 120 120">
+                                    <circle cx="60" cy="60" r="54" fill="none" stroke="#f1f5f9" strokeWidth="10"/>
+                                    <circle cx="60" cy="60" r="54" fill="none" stroke={ringColor} strokeWidth="10"
+                                        strokeDasharray={circumference} strokeDashoffset={dashOffset}
+                                        strokeLinecap="round" style={{transition: 'stroke-dashoffset 0.5s ease'}}/>
+                                </svg>
+                                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                    <span className="text-3xl font-black text-slate-800">{pct}%</span>
+                                    <span className="text-xs text-slate-400 font-bold">{todayMl} ml</span>
+                                </div>
+                            </div>
+                            <p className="text-slate-500 text-sm">
+                                今日目標：<span className="font-bold text-slate-700">{goal} ml</span>
+                                {pct >= 100 && <span className="ml-2 text-emerald-500 font-bold">✓ 達標！</span>}
+                            </p>
+                            {/* 目標設定 */}
+                            {editingGoal ? (
+                                <div className="flex items-center gap-2 mt-3">
+                                    <input type="number" value={goalInput} onChange={e => setGoalInput(e.target.value)}
+                                        className="w-24 px-3 py-1.5 rounded-xl border-2 border-blue-200 text-center text-sm font-bold outline-none"
+                                        onKeyDown={e => e.key === 'Enter' && saveGoal()} autoFocus />
+                                    <span className="text-sm text-slate-400">ml</span>
+                                    <button onClick={saveGoal} className="text-xs font-bold text-blue-500 hover:text-blue-700">儲存</button>
+                                </div>
+                            ) : (
+                                <button onClick={() => { setGoalInput(String(goal)); setEditingGoal(true); }}
+                                    className="mt-2 text-xs text-slate-400 hover:text-blue-400 transition">
+                                    修改目標
+                                </button>
+                            )}
+                        </div>
+
+                        {/* 快速新增 */}
+                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                            <h4 className="text-xs font-bold text-slate-400 mb-3">快速新增</h4>
+                            <div className="grid grid-cols-3 gap-2 mb-3">
+                                {QUICK.map(({ label, ml }) => (
+                                    <button key={ml} onClick={() => add(ml)}
+                                        className="flex flex-col items-center py-3 bg-sky-50 hover:bg-sky-100 active:scale-95 rounded-2xl transition border border-sky-100">
+                                        <span className="text-xl mb-1">💧</span>
+                                        <span className="text-xs font-bold text-sky-700">{label}</span>
+                                        <span className="text-[10px] text-sky-500">{ml} ml</span>
+                                    </button>
+                                ))}
+                            </div>
+                            {/* 自訂輸入 */}
+                            <div className="flex gap-2">
+                                <input type="number" placeholder="自訂 ml..." value={customMl}
+                                    onChange={e => setCustomMl(e.target.value)}
+                                    className="flex-1 px-4 py-2.5 rounded-xl bg-slate-50 border-2 border-slate-100 focus:border-sky-300 outline-none text-sm text-slate-700 transition"
+                                    onKeyDown={e => { if (e.key === 'Enter' && parseInt(customMl) > 0) { add(parseInt(customMl)); setCustomMl(''); }}}
+                                />
+                                <button onClick={() => { if (parseInt(customMl) > 0) { add(parseInt(customMl)); setCustomMl(''); }}}
+                                    disabled={!parseInt(customMl)}
+                                    className="px-4 py-2.5 bg-sky-500 text-white rounded-xl font-bold text-sm hover:bg-sky-600 active:scale-95 transition disabled:opacity-40">
+                                    加入
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* 今日紀錄 + 重設 */}
+                        <div className="flex justify-between items-center px-1">
+                            <p className="text-xs text-slate-400">今日已喝 <span className="font-bold text-sky-500">{todayMl} ml</span></p>
+                            <button onClick={reset} className="text-xs text-slate-400 hover:text-rose-400 transition">重設今日</button>
+                        </div>
+
+                        {/* 大白寄語 */}
+                        <div className="bg-slate-800 text-white p-5 rounded-[2rem]">
+                            <p className="text-sm leading-relaxed">
+                                {pct >= 100
+                                    ? '"今天喝水達標了！大白為你感到驕傲。繼續保持。"'
+                                    : pct >= 50
+                                    ? '"進度不錯！還需要補充 ' + (goal - todayMl) + ' ml 才能達標。"'
+                                    : '"記得多喝水喔！人體有 60% 是水分，充足的水分對健康非常重要。"'
+                                }
+                            </p>
+                        </div>
+
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 工具 16: 文章摘要 (Article Summarizer)
+        // ==========================================
+        function ToolSummarize({ onBack }) {
+            const [input, setInput] = useState('');
+            const [result, setResult] = useState(null);
+            const [loading, setLoading] = useState(false);
+
+            const handleSummarize = async () => {
+                if (!input.trim()) return;
+                setLoading(true);
+                try {
+                    const prompt = `你是大白，一個聰明的閱讀助手。請分析以下文章，提供精準摘要。
+使用繁體中文回覆。
+JSON結構: {
+  "title": "String (推斷的文章標題，若無則自行命名)",
+  "summary": "String (2-3句核心摘要)",
+  "keyPoints": ["String", "String", "String"],
+  "readingTime": "String (估計閱讀原文的時間，如 3 分鐘)",
+  "sentiment": "正面|中立|負面",
+  "baymaxTip": "String (大白對這篇文章的一句評語)"
+}`;
+                    const data = await callAI([{ text: input }], prompt);
+                    setResult(data);
+                } catch (e) { /* 錯誤已在 callAI 處理 */ }
+                setLoading(false);
+            };
+
+            const sentimentStyle = (s) => {
+                if (s === '正面') return 'bg-emerald-100 text-emerald-700';
+                if (s === '負面') return 'bg-rose-100 text-rose-600';
+                return 'bg-slate-100 text-slate-600';
+            };
+
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="文章摘要" />
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar space-y-4 pb-safe-bottom">
+
+                        {/* 輸入區 */}
+                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                            <label className="text-xs font-bold text-slate-400 block mb-2">貼上文章內容</label>
+                            <textarea
+                                value={input}
+                                onChange={e => { setInput(e.target.value); setResult(null); }}
+                                placeholder="將文章、新聞或任何長文貼到這裡..."
+                                className="w-full bg-slate-50 rounded-xl p-3 outline-none resize-none h-36 text-sm placeholder-slate-300 focus:ring-2 focus:ring-indigo-100 transition"
+                            />
+                            <button
+                                onClick={handleSummarize}
+                                disabled={loading || !input.trim()}
+                                className="mt-3 w-full py-3.5 bg-indigo-500 text-white rounded-2xl font-bold hover:bg-indigo-600 active:scale-95 transition-all disabled:opacity-40 shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
+                            >
+                                {loading
+                                    ? <><Spinner /> 摘要中...</>
+                                    : <><Icons.Sparkles size={18} /> 生成摘要</>}
+                            </button>
+                        </div>
+
+                        {/* 結果 */}
+                        {result && (
+                            <div className="space-y-3 animate-slide-up">
+                                {/* 標題 + 元資訊 */}
+                                <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                    <h3 className="text-lg font-black text-slate-800 mb-3 leading-snug">{result.title}</h3>
+                                    <div className="flex flex-wrap gap-2 mb-4">
+                                        <span className="text-xs bg-slate-100 text-slate-500 px-3 py-1 rounded-full font-bold">
+                                            📖 {result.readingTime}
+                                        </span>
+                                        {result.sentiment && (
+                                            <span className={`text-xs px-3 py-1 rounded-full font-bold ${sentimentStyle(result.sentiment)}`}>
+                                                {result.sentiment === '正面' ? '👍' : result.sentiment === '負面' ? '👎' : '📊'} {result.sentiment}
+                                            </span>
+                                        )}
+                                    </div>
+                                    {/* 核心摘要 */}
+                                    <p className="text-sm text-slate-600 leading-relaxed">{result.summary}</p>
+                                </div>
+
+                                {/* 重點列表 */}
+                                <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                    <h4 className="text-xs font-bold text-slate-400 mb-3">重點摘錄</h4>
+                                    <div className="space-y-2">
+                                        {result.keyPoints?.map((pt, i) => (
+                                            <div key={i} className="flex items-start gap-3">
+                                                <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-[10px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
+                                                <p className="text-sm text-slate-600 leading-relaxed">{pt}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* 大白評語 */}
+                                <div className="bg-slate-800 text-white p-5 rounded-[2rem]">
+                                    <p className="text-sm leading-relaxed">"{result.baymaxTip}"</p>
+                                </div>
+
+                                <button onClick={() => { setInput(''); setResult(null); }}
+                                    className="w-full py-3 text-slate-400 font-bold text-sm">
+                                    再摘要一篇
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
         // 主程式：Baymax OS
         // ==========================================
         function App() {
@@ -3471,6 +3731,8 @@ JSON結構: {
                 { id: 'firstaid', name: '急救指南', icon: <Icons.HeartPulse size={28} />, desc: '初步急救建議' },
                 { id: 'travel', name: '旅行助手', icon: <Icons.MapPin size={28} />, desc: '行程規劃' },
                 { id: 'translator', name: '翻譯器', icon: <Icons.Languages size={28} />, desc: '多語翻譯' },
+                { id: 'water', name: '喝水提醒', icon: <Icons.Droplets size={28} />, desc: '每日飲水追蹤' },
+                { id: 'summarize', name: '文章摘要', icon: <Icons.FileText size={28} />, desc: 'AI 重點提取' },
             ];
 
             const toolComponents = {
@@ -3487,6 +3749,8 @@ JSON結構: {
                 firstaid: ToolFirstAid,
                 travel: ToolTravel,
                 translator: ToolTranslator,
+                water: ToolWater,
+                summarize: ToolSummarize,
                 settings: ToolSettings,
             };
 
@@ -3494,6 +3758,22 @@ JSON結構: {
 
             // 偵測是否已設定 API Key（每次回首頁時重新檢查）
             const hasApiKey = !!getApiKey();
+
+            // 健康儀表板資料（直接從 localStorage 讀取，每次回首頁重新取得）
+            const dashData = React.useMemo(() => {
+                const today = new Date().toISOString().split('T')[0];
+                const thisMonth = new Date().toISOString().slice(0, 7);
+                const habits = safeReadStorage('baymax_habits', []);
+                const doneToday = habits.filter(h => h.records?.includes(today)).length;
+                const expenses = safeReadStorage('baymax_expenses', []);
+                const monthTotal = expenses
+                    .filter(r => r.date?.startsWith(thisMonth))
+                    .reduce((s, r) => s + (r.amount || 0), 0);
+                const waterLog = safeReadStorage('baymax_water', {});
+                const waterGoal = parseInt(localStorage.getItem('baymax_water_goal') || '2000', 10);
+                const todayWater = waterLog[today] || 0;
+                return { doneToday, totalHabits: habits.length, monthTotal, todayWater, waterGoal };
+            }, [view]); // 每次 view 變更時重新計算（包含從工具頁返回時）
 
             // 渲染對應工具元件
             const ActiveTool = toolComponents[view];
@@ -3540,6 +3820,62 @@ JSON結構: {
                                         </div>
                                         <Icons.ChevronLeft className="text-amber-400 rotate-180 shrink-0" size={18} />
                                     </button>
+                                )}
+
+                                {/* 健康儀表板 */}
+                                {(dashData.totalHabits > 0 || dashData.todayWater > 0 || dashData.monthTotal > 0) && (
+                                    <div className="mb-3 shrink-0">
+                                        <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+                                            {/* 習慣完成率 */}
+                                            {dashData.totalHabits > 0 && (
+                                                <button onClick={() => setView('habit')}
+                                                    className="flex-shrink-0 bg-white rounded-2xl px-4 py-3 shadow-card border border-slate-100 flex items-center gap-3 hover:shadow-soft active:scale-95 transition-all min-w-[140px]">
+                                                    <div className="w-9 h-9 rounded-full bg-emerald-50 flex items-center justify-center text-lg shrink-0">✅</div>
+                                                    <div className="text-left">
+                                                        <p className="text-xs text-slate-400 font-bold">今日習慣</p>
+                                                        <p className="text-base font-black text-slate-800">
+                                                            {dashData.doneToday}
+                                                            <span className="text-xs font-bold text-slate-400"> / {dashData.totalHabits}</span>
+                                                        </p>
+                                                    </div>
+                                                </button>
+                                            )}
+                                            {/* 喝水進度 */}
+                                            <button onClick={() => setView('water')}
+                                                className="flex-shrink-0 bg-white rounded-2xl px-4 py-3 shadow-card border border-slate-100 flex items-center gap-3 hover:shadow-soft active:scale-95 transition-all min-w-[140px]">
+                                                <div className="w-9 h-9 rounded-full bg-sky-50 flex items-center justify-center shrink-0">
+                                                    <Icons.Droplets size={18} className="text-sky-500" />
+                                                </div>
+                                                <div className="text-left">
+                                                    <p className="text-xs text-slate-400 font-bold">今日飲水</p>
+                                                    <p className="text-base font-black text-slate-800">
+                                                        {dashData.todayWater}
+                                                        <span className="text-xs font-bold text-slate-400"> ml</span>
+                                                    </p>
+                                                    <div className="w-full h-1 bg-slate-100 rounded-full mt-1">
+                                                        <div className="h-1 bg-sky-400 rounded-full transition-all"
+                                                            style={{width: `${Math.min(100, Math.round(dashData.todayWater / dashData.waterGoal * 100))}%`}} />
+                                                    </div>
+                                                </div>
+                                            </button>
+                                            {/* 本月支出 */}
+                                            {dashData.monthTotal > 0 && (
+                                                <button onClick={() => setView('expense')}
+                                                    className="flex-shrink-0 bg-white rounded-2xl px-4 py-3 shadow-card border border-slate-100 flex items-center gap-3 hover:shadow-soft active:scale-95 transition-all min-w-[140px]">
+                                                    <div className="w-9 h-9 rounded-full bg-teal-50 flex items-center justify-center shrink-0">
+                                                        <Icons.Wallet size={18} className="text-teal-500" />
+                                                    </div>
+                                                    <div className="text-left">
+                                                        <p className="text-xs text-slate-400 font-bold">本月支出</p>
+                                                        <p className="text-base font-black text-slate-800">
+                                                            {dashData.monthTotal.toLocaleString()}
+                                                            <span className="text-xs font-bold text-slate-400"> 元</span>
+                                                        </p>
+                                                    </div>
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
                                 )}
                                 <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar grid grid-cols-2 gap-4 auto-rows-min content-start pb-safe-bottom px-1">
                                     {tools.map((tool) => (
