@@ -98,20 +98,31 @@
         // ==========================================
         // 設定 & API
         // ==========================================
-        const DEFAULT_API_KEY = "AIzaSyCS7cl7yFQDWfDOnjLx_RrZ_67mhbL4Uqk";
-        const PROXY_BASE = "https://gemini-api-proxy-omega-khaki.vercel.app";
-        const API_URL = `${PROXY_BASE}/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent`;
+        const GEMINI_PROXY = "https://gemini-api-proxy-omega-khaki.vercel.app";
+        const GEMINI_URL = `${GEMINI_PROXY}/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent`;
+        const MINIMAX_URL = "https://api.minimaxi.chat/v1/chat/completions";
+        const MINIMAX_MODEL = "MiniMax-Text-01";
 
         /**
-         * 動態取得 API Key：優先從 localStorage 讀取，否則使用預設值
+         * 取得目前使用中的 API 設定 { key, provider }
+         * provider: "gemini" | "minimax"
          */
-        function getApiKey() {
+        function getApiConfig() {
             try {
-                const saved = localStorage.getItem('baymax_api_key');
-                return saved && saved.trim() ? saved.trim() : DEFAULT_API_KEY;
+                const slots = JSON.parse(localStorage.getItem('baymax_api_slots') || '[]');
+                const activeIdx = parseInt(localStorage.getItem('baymax_api_active') || '0', 10);
+                const active = slots[activeIdx];
+                if (active?.key?.trim()) return { key: active.key.trim(), provider: active.provider || 'gemini' };
+                const first = slots.find(s => s.key?.trim());
+                return first ? { key: first.key.trim(), provider: first.provider || 'gemini' } : null;
             } catch (e) {
-                return DEFAULT_API_KEY;
+                return null;
             }
+        }
+
+        /** 向後相容：只取 key 字串 */
+        function getApiKey() {
+            return getApiConfig()?.key ?? null;
         }
 
         // ==========================================
@@ -155,22 +166,62 @@
         }
 
         /**
-         * 呼叫 Gemini API
+         * 將 Gemini parts 格式轉換為 OpenAI messages 格式（供 MiniMax 使用）
          */
-        async function callGemini(parts, systemPrompt) {
-            const apiKey = getApiKey();
-            if (!apiKey) throw new Error("請先在設定頁面填入 API Key");
+        function partsToOpenAIContent(parts) {
+            const mapped = parts.map(p => {
+                if (p.inlineData) {
+                    return { type: "image_url", image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } };
+                }
+                return { type: "text", text: p.text };
+            });
+            // 純文字時用簡單字串格式，否則用陣列格式（含圖片）
+            if (mapped.length === 1 && mapped[0].type === 'text') return mapped[0].text;
+            return mapped;
+        }
+
+        /**
+         * 呼叫 AI API（自動依 slot provider 路由至 Gemini 或 MiniMax）
+         */
+        async function callAI(parts, systemPrompt) {
+            const config = getApiConfig();
+            if (!config) {
+                alert("⚙️ 尚未設定 API Key\n請點擊右上角齒輪圖示前往設定頁面，新增你的 API Key。");
+                throw new Error("NO_API_KEY");
+            }
+
+            const { key, provider } = config;
 
             try {
-                const response = await fetch(`${API_URL}?key=${apiKey}`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        contents: [{ role: "user", parts }],
-                        systemInstruction: { parts: [{ text: systemPrompt }] },
-                        generationConfig: { responseMimeType: "application/json" }
-                    }),
-                });
+                let response;
+                if (provider === 'minimax') {
+                    response = await fetch(MINIMAX_URL, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Authorization": `Bearer ${key}`
+                        },
+                        body: JSON.stringify({
+                            model: MINIMAX_MODEL,
+                            messages: [
+                                { role: "system", content: systemPrompt },
+                                { role: "user",   content: partsToOpenAIContent(parts) }
+                            ],
+                            response_format: { type: "json_object" }
+                        }),
+                    });
+                } else {
+                    // Gemini（預設）
+                    response = await fetch(`${GEMINI_URL}?key=${key}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            contents: [{ role: "user", parts }],
+                            systemInstruction: { parts: [{ text: systemPrompt }] },
+                            generationConfig: { responseMimeType: "application/json" }
+                        }),
+                    });
+                }
 
                 if (!response.ok) {
                     const errorText = await response.text();
@@ -178,25 +229,27 @@
                 }
 
                 const data = await response.json();
-                const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                let text;
+                if (provider === 'minimax') {
+                    text = data.choices?.[0]?.message?.content;
+                } else {
+                    text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                }
                 return JSON.parse(text.replace(/```json|```/g, '').trim());
+
             } catch (error) {
                 console.error("API Call Failed:", error);
-
                 if (error.message.includes("Failed to fetch") || error.name === 'TypeError') {
-                    alert(
-                        "⚠️ CORS 連線錯誤 (Access Blocked)\n\n" +
-                        "原因：Vercel 伺服器拒絕了您的連線。\n" +
-                        "解決方法：\n" +
-                        "1. 如果這是您的 Vercel 專案，請在 vercel.json 中加入 CORS Header。\n" +
-                        "2. 如果不是，請使用瀏覽器外掛 'Allow CORS' (僅限測試)。"
-                    );
+                    alert("⚠️ 連線失敗\n請確認網路連線，或 API 伺服器是否正常。");
                 } else {
                     alert("連線失敗：" + error.message);
                 }
                 throw error;
             }
         }
+
+        /** 向後相容別名 */
+        const callGemini = callAI;
 
         // ==========================================
         // Icons (Lucide SVG 元件)
@@ -416,6 +469,23 @@
         };
         // PenLine 與 Edit3 完全相同，統一使用 Edit3
         Icons.PenLine = Icons.Edit3;
+        Icons.Droplets = (p) => (
+            <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M7 16.3c2.2 0 4-1.83 4-4.05 0-1.16-.57-2.26-1.71-3.19S7.29 6.75 7 5.3c-.29 1.45-1.14 2.84-2.29 3.76S3 11.1 3 12.25c0 2.22 1.8 4.05 4 4.05z"/>
+                <path d="M12.56 6.6A10.97 10.97 0 0 0 14 3.02c.5 2.5 2 4.9 4 6.5s3 3.5 3 5.5a6.98 6.98 0 0 1-11.91 4.97"/>
+            </svg>
+        );
+        Icons.FileText = (p) => (
+            <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" x2="8" y1="13" y2="13"/>
+                <line x1="16" x2="8" y1="17" y2="17"/>
+                <line x1="10" x2="8" y1="9" y2="9"/>
+            </svg>
+        );
 
         // ==========================================
         // 共用 UI 元件
@@ -510,7 +580,6 @@
                     setResult(data);
                     setStep('result');
                 } catch (e) {
-                    alert(e.message);
                     setStep('idle');
                 }
             };
@@ -629,7 +698,7 @@
                     setHistory(prev => [{ ...data, id: Date.now() }, ...prev]);
                     setInput("");
                 } catch (e) {
-                    alert("查詢失敗，請稍後再試");
+                    // 錯誤已在 callGemini 處理
                 }
                 setLoading(false);
             };
@@ -933,7 +1002,6 @@
                     setResult(data);
                     setStep('result');
                 } catch (e) {
-                    alert("掃描失敗");
                     setStep('idle');
                 }
             };
@@ -1067,6 +1135,7 @@
                         ...p
                     ]);
                     setViewMode('list');
+                    setNewEntry({ service: '', username: '', password: '', note: '' });
                 }
                 setLoading(false);
             };
@@ -1261,7 +1330,7 @@
                     setViewMode('list');
                     setNewEntry({ title: '', rating: 5 });
                 } catch (e) {
-                    alert("找不到這部電影...");
+                    // 錯誤已在 callGemini 處理
                 }
                 setLoading(false);
             };
@@ -1874,7 +1943,6 @@ JSON結構: { "ingredients": ["String"], "recipes": [{ "name": "String", "diffic
                     setResult(data);
                     setStep('result');
                 } catch (e) {
-                    alert("分析失敗，請重試");
                     setStep('idle');
                 }
             };
@@ -2627,7 +2695,7 @@ JSON結構: {
                     setViewMode('detail');
                     setNewTrip({ destination: '', days: '3', style: '' });
                 } catch (e) {
-                    alert("規劃失敗，請重試");
+                    // 錯誤已在 callGemini 處理
                 }
                 setLoading(false);
             };
@@ -3031,182 +3099,347 @@ JSON結構: {
         // 工具：設定頁面
         // ==========================================
         function ToolSettings({ onBack }) {
-            const [keyInput, setKeyInput] = useState('');
+            const MAX_SLOTS = 3;
+            const SLOT_COLORS = ['bg-blue-500', 'bg-violet-500', 'bg-emerald-500'];
+            const SLOT_LABELS = ['A', 'B', 'C'];
+
+            // slots: [{ name, key, provider }], activeIdx: number
+            const [slots, setSlots] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('baymax_api_slots') || '[]'); } catch { return []; }
+            });
+            const [activeIdx, setActiveIdx] = useState(() => {
+                return parseInt(localStorage.getItem('baymax_api_active') || '0', 10);
+            });
+
+            // 編輯某個 slot 的狀態
+            const [editingIdx, setEditingIdx] = useState(null);
+            const [editName, setEditName] = useState('');
+            const [editKey, setEditKey] = useState('');
+            const [editProvider, setEditProvider] = useState('gemini');
             const [showKey, setShowKey] = useState(false);
-            const [testStatus, setTestStatus] = useState(null); // null | 'testing' | 'success' | 'error'
+            const [testStatus, setTestStatus] = useState(null);
             const [testMsg, setTestMsg] = useState('');
-            const [saved, setSaved] = useState(false);
 
-            // 載入已儲存的 key
-            useEffect(() => {
-                try {
-                    const stored = localStorage.getItem('baymax_api_key');
-                    if (stored) setKeyInput(stored);
-                } catch (e) {}
-            }, []);
+            const PROVIDERS = [
+                { id: 'gemini',   label: 'Google Gemini',  hint: 'AIza 開頭',  color: 'bg-blue-100 text-blue-700' },
+                { id: 'minimax',  label: 'MiniMax',        hint: 'eyJ 或其他',  color: 'bg-violet-100 text-violet-700' },
+            ];
 
-            const currentKey = getApiKey();
-            const isUsingDefault = !localStorage.getItem('baymax_api_key') || localStorage.getItem('baymax_api_key')?.trim() === '';
+            const providerInfo = (id) => PROVIDERS.find(p => p.id === id) || PROVIDERS[0];
+
             const maskedKey = (key) => {
-                if (!key) return '';
+                if (!key) return '（未設定）';
                 if (key.length <= 8) return '••••••••';
-                return key.slice(0, 4) + '••••••••••••' + key.slice(-4);
+                return key.slice(0, 6) + '••••••••' + key.slice(-4);
+            };
+
+            const keyWarning = (key, provider) => {
+                if (!key.trim()) return null;
+                if (provider === 'gemini' && !key.trim().startsWith('AIza')) return '⚠️ Gemini Key 通常以「AIza」開頭';
+                return null;
+            };
+
+            const persistSlots = (newSlots, newActive) => {
+                try {
+                    localStorage.setItem('baymax_api_slots', JSON.stringify(newSlots));
+                    localStorage.setItem('baymax_api_active', String(newActive));
+                } catch (e) {}
+            };
+
+            const handleActivate = (idx) => {
+                setActiveIdx(idx);
+                persistSlots(slots, idx);
+            };
+
+            const startAdd = () => {
+                setEditingIdx(slots.length);
+                setEditName(`Key ${SLOT_LABELS[slots.length] || slots.length + 1}`);
+                setEditKey('');
+                setEditProvider('gemini');
+                setShowKey(false);
+                setTestStatus(null);
+            };
+
+            const startEdit = (idx) => {
+                setEditingIdx(idx);
+                setEditName(slots[idx].name);
+                setEditKey(slots[idx].key);
+                setEditProvider(slots[idx].provider || 'gemini');
+                setShowKey(false);
+                setTestStatus(null);
             };
 
             const handleSave = () => {
-                const trimmed = keyInput.trim();
-                if (trimmed) {
-                    localStorage.setItem('baymax_api_key', trimmed);
-                } else {
-                    localStorage.removeItem('baymax_api_key');
-                }
-                setSaved(true);
-                setTestStatus(null);
-                setTimeout(() => setSaved(false), 2000);
+                const key = editKey.trim();
+                const name = editName.trim() || `Key ${editingIdx + 1}`;
+                const newSlots = [...slots];
+                newSlots[editingIdx] = { name, key, provider: editProvider };
+                const newActive = editingIdx < slots.length ? activeIdx : editingIdx;
+                setSlots(newSlots);
+                setActiveIdx(newActive);
+                persistSlots(newSlots, newActive);
+                setEditingIdx(null);
             };
 
-            const handleReset = () => {
-                localStorage.removeItem('baymax_api_key');
-                setKeyInput('');
-                setSaved(true);
-                setTestStatus(null);
-                setTimeout(() => setSaved(false), 2000);
+            const handleDelete = (idx) => {
+                const newSlots = slots.filter((_, i) => i !== idx);
+                const newActive = Math.min(activeIdx, Math.max(0, newSlots.length - 1));
+                setSlots(newSlots);
+                setActiveIdx(newActive);
+                persistSlots(newSlots, newActive);
+                if (editingIdx === idx) setEditingIdx(null);
             };
 
             const handleTest = async () => {
+                const key = editKey.trim();
+                if (!key) { setTestStatus('error'); setTestMsg('請先輸入 API Key'); return; }
                 setTestStatus('testing');
                 setTestMsg('');
-                const key = keyInput.trim() || DEFAULT_API_KEY;
                 try {
-                    const response = await fetch(`${API_URL}?key=${key}`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            contents: [{ role: "user", parts: [{ text: "回覆 OK" }] }],
-                            generationConfig: { maxOutputTokens: 10 }
-                        }),
-                    });
+                    let response;
+                    if (editProvider === 'minimax') {
+                        response = await fetch(MINIMAX_URL, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
+                            body: JSON.stringify({
+                                model: MINIMAX_MODEL,
+                                messages: [{ role: "user", content: "hi" }],
+                                max_tokens: 5
+                            }),
+                        });
+                    } else {
+                        response = await fetch(`${GEMINI_URL}?key=${key}`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                contents: [{ role: "user", parts: [{ text: "hi" }] }],
+                                generationConfig: { maxOutputTokens: 5 }
+                            }),
+                        });
+                    }
                     if (response.ok) {
                         setTestStatus('success');
-                        setTestMsg('API Key 連線成功！');
+                        setTestMsg('✓ 連線成功，Key 有效');
                     } else {
-                        const errText = await response.text();
                         setTestStatus('error');
-                        if (response.status === 400 || response.status === 403) {
-                            setTestMsg('API Key 無效或已過期');
-                        } else {
-                            setTestMsg(`錯誤 ${response.status}: ${errText.slice(0, 100)}`);
-                        }
+                        setTestMsg(response.status === 400 || response.status === 401 || response.status === 403
+                            ? '✗ API Key 無效或已過期'
+                            : `✗ 錯誤 ${response.status}`);
                     }
-                } catch (err) {
+                } catch {
                     setTestStatus('error');
-                    setTestMsg('連線失敗：無法連接伺服器');
+                    setTestMsg('✗ 無法連接伺服器');
                 }
             };
 
-            return (
-                <div className="h-full flex flex-col animate-fade-in">
-                    <PageHeader title="設定" subtitle="API 金鑰管理" onBack={onBack} />
-                    <div className="flex-1 overflow-y-auto no-scrollbar space-y-4 pb-10">
+            const activeKey = getApiKey();
 
-                        {/* 說明卡片 */}
-                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
-                            <div className="flex items-center gap-3 mb-3">
-                                <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center">
-                                    <Icons.Settings size={20} className="text-blue-500" />
-                                </div>
-                                <h3 className="font-bold text-slate-700">API Key 設定</h3>
-                            </div>
-                            <p className="text-sm text-slate-500 leading-relaxed">
-                                本應用使用 Google Gemini API 提供 AI 功能。你可以使用預設的 API Key，或填入自己的 Key 來獲得更穩定的服務。
-                            </p>
-                        </div>
+            // ── 編輯畫面 ──────────────────────────────────────────
+            if (editingIdx !== null) {
+                const isNew = editingIdx >= slots.length;
+                const warn = keyWarning(editKey, editProvider);
+                return (
+                    <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                        <PageHeader onBack={() => setEditingIdx(null)} title={isNew ? '新增 API Key' : '編輯 API Key'} />
+                        <div className="flex-1 overflow-y-auto p-6 no-scrollbar space-y-4 pb-safe-bottom">
 
-                        {/* 當前狀態 */}
-                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
-                            <h4 className="text-xs font-bold text-slate-400 mb-3">目前使用的 Key</h4>
-                            <div className={`flex items-center gap-2 px-4 py-3 rounded-xl ${isUsingDefault ? 'bg-amber-50' : 'bg-green-50'}`}>
-                                <div className={`w-2 h-2 rounded-full ${isUsingDefault ? 'bg-amber-400' : 'bg-green-400'}`}></div>
-                                <span className={`text-sm font-medium ${isUsingDefault ? 'text-amber-700' : 'text-green-700'}`}>
-                                    {isUsingDefault ? '使用預設 Key' : '使用自訂 Key'}
-                                </span>
-                            </div>
-                            <div className="mt-2 px-4 py-2 bg-slate-50 rounded-xl">
-                                <code className="text-xs text-slate-400 break-all font-mono">
-                                    {maskedKey(currentKey)}
-                                </code>
-                            </div>
-                        </div>
-
-                        {/* 輸入 API Key */}
-                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
-                            <h4 className="text-xs font-bold text-slate-400 mb-3">自訂 API Key</h4>
-                            <div className="relative">
+                            {/* 名稱 */}
+                            <div className="bg-white rounded-2xl p-4 shadow-soft">
+                                <label className="text-xs font-bold text-slate-400 block mb-2">名稱（用於識別）</label>
                                 <input
-                                    type={showKey ? "text" : "password"}
-                                    value={keyInput}
-                                    onChange={(e) => { setKeyInput(e.target.value); setSaved(false); }}
-                                    placeholder="貼上你的 Gemini API Key..."
-                                    className="w-full px-4 py-3 pr-12 rounded-xl bg-slate-50 border-2 border-slate-100 focus:border-blue-300 focus:outline-none text-sm text-slate-700 font-mono transition"
+                                    value={editName}
+                                    onChange={e => setEditName(e.target.value)}
+                                    placeholder="例如：個人 / 公司 / 備用"
+                                    className="w-full px-4 py-3 rounded-xl bg-slate-50 border-2 border-slate-100 focus:border-blue-300 focus:outline-none text-sm text-slate-700 transition"
                                 />
-                                <button
-                                    onClick={() => setShowKey(!showKey)}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition"
-                                >
-                                    {showKey ? <Icons.EyeOff size={18} /> : <Icons.Eye size={18} />}
-                                </button>
                             </div>
 
-                            {/* 操作按鈕 */}
-                            <div className="flex gap-2 mt-4">
-                                <button
-                                    onClick={handleSave}
-                                    className="flex-1 py-3 bg-blue-500 text-white rounded-xl font-bold text-sm hover:bg-blue-600 active:scale-95 transition-all"
-                                >
-                                    {saved ? '✓ 已儲存' : '儲存'}
-                                </button>
+                            {/* API 服務商選擇 */}
+                            <div className="bg-white rounded-2xl p-4 shadow-soft">
+                                <label className="text-xs font-bold text-slate-400 block mb-3">AI 服務商</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {PROVIDERS.map(p => (
+                                        <button
+                                            key={p.id}
+                                            onClick={() => { setEditProvider(p.id); setTestStatus(null); }}
+                                            className={`flex flex-col items-start p-3 rounded-xl border-2 transition text-left ${
+                                                editProvider === p.id
+                                                    ? 'border-blue-400 bg-blue-50'
+                                                    : 'border-slate-100 bg-slate-50 hover:border-slate-200'
+                                            }`}
+                                        >
+                                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full mb-1 ${p.color}`}>{p.label}</span>
+                                            <span className="text-[11px] text-slate-400 font-mono">{p.hint}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* API Key 輸入 */}
+                            <div className="bg-white rounded-2xl p-4 shadow-soft">
+                                <label className="text-xs font-bold text-slate-400 block mb-2">API Key</label>
+                                <div className="relative">
+                                    <input
+                                        type={showKey ? "text" : "password"}
+                                        value={editKey}
+                                        onChange={e => { setEditKey(e.target.value); setTestStatus(null); }}
+                                        placeholder={editProvider === 'gemini' ? 'AIza...' : '貼上 MiniMax API Key...'}
+                                        className={`w-full px-4 py-3 pr-12 rounded-xl bg-slate-50 border-2 focus:outline-none text-sm text-slate-700 font-mono transition ${
+                                            warn ? 'border-amber-300' : 'border-slate-100 focus:border-blue-300'
+                                        }`}
+                                    />
+                                    <button
+                                        onClick={() => setShowKey(v => !v)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition"
+                                    >
+                                        {showKey ? <Icons.EyeOff size={18} /> : <Icons.Eye size={18} />}
+                                    </button>
+                                </div>
+                                {warn && <p className="mt-1.5 text-xs text-amber-500">{warn}</p>}
+
+                                {/* 測試 */}
                                 <button
                                     onClick={handleTest}
-                                    disabled={testStatus === 'testing'}
-                                    className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 active:scale-95 transition-all disabled:opacity-50"
+                                    disabled={testStatus === 'testing' || !editKey.trim()}
+                                    className="mt-3 w-full py-2.5 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 active:scale-95 transition-all disabled:opacity-40"
                                 >
                                     {testStatus === 'testing' ? '測試中...' : '測試連線'}
                                 </button>
+                                {testStatus && testStatus !== 'testing' && (
+                                    <div className={`mt-2 px-4 py-2.5 rounded-xl text-sm font-medium ${testStatus === 'success' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500'}`}>
+                                        {testMsg}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 儲存 / 刪除 */}
+                            <div className="flex gap-3">
+                                {!isNew && (
+                                    <button
+                                        onClick={() => { handleDelete(editingIdx); }}
+                                        className="py-4 px-5 bg-red-50 text-red-400 rounded-2xl font-bold text-sm hover:bg-red-100 active:scale-95 transition-all"
+                                    >
+                                        <Icons.Trash2 size={18} />
+                                    </button>
+                                )}
                                 <button
-                                    onClick={handleReset}
-                                    className="py-3 px-4 bg-red-50 text-red-400 rounded-xl font-bold text-sm hover:bg-red-100 active:scale-95 transition-all"
+                                    onClick={handleSave}
+                                    disabled={!editKey.trim()}
+                                    className="flex-1 py-4 bg-blue-500 text-white rounded-2xl font-bold text-sm hover:bg-blue-600 active:scale-95 transition-all disabled:opacity-40 shadow-lg shadow-blue-200"
                                 >
-                                    重設
+                                    儲存
                                 </button>
                             </div>
 
-                            {/* 測試結果 */}
-                            {testStatus && testStatus !== 'testing' && (
-                                <div className={`mt-3 px-4 py-3 rounded-xl text-sm font-medium ${testStatus === 'success' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500'}`}>
-                                    {testMsg}
+                        </div>
+                    </div>
+                );
+            }
+
+            // ── 主畫面 ──────────────────────────────────────────
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="設定" />
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar space-y-4 pb-safe-bottom">
+
+                        {/* 目前狀態 */}
+                        <div className={`rounded-2xl p-4 ${activeKey ? 'bg-green-50 border border-green-100' : 'bg-amber-50 border border-amber-100'}`}>
+                            <div className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full shrink-0 ${activeKey ? 'bg-green-400' : 'bg-amber-400'}`}></div>
+                                <span className={`text-sm font-bold ${activeKey ? 'text-green-700' : 'text-amber-700'}`}>
+                                    {activeKey ? '已設定 API Key，功能正常' : '尚未設定 API Key'}
+                                </span>
+                            </div>
+                            {activeKey && (
+                                <code className="block mt-1.5 text-xs text-slate-400 font-mono pl-4">{maskedKey(activeKey)}</code>
+                            )}
+                        </div>
+
+                        {/* Key 槽位列表 */}
+                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                            <div className="flex items-center justify-between mb-3">
+                                <h4 className="text-xs font-bold text-slate-400">API Key 管理（最多 {MAX_SLOTS} 個）</h4>
+                                {slots.length < MAX_SLOTS && (
+                                    <button
+                                        onClick={startAdd}
+                                        className="flex items-center gap-1 text-xs font-bold text-blue-500 hover:text-blue-600 transition"
+                                    >
+                                        <Icons.Plus size={14} /> 新增
+                                    </button>
+                                )}
+                            </div>
+
+                            {slots.length === 0 ? (
+                                <button
+                                    onClick={startAdd}
+                                    className="w-full py-6 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 hover:border-blue-300 hover:text-blue-400 transition flex flex-col items-center gap-2"
+                                >
+                                    <Icons.Plus size={24} />
+                                    <span className="text-sm font-bold">新增第一個 API Key</span>
+                                </button>
+                            ) : (
+                                <div className="space-y-2">
+                                    {slots.map((slot, idx) => {
+                                        const isActive = idx === activeIdx;
+                                        const color = SLOT_COLORS[idx % SLOT_COLORS.length];
+                                        const label = SLOT_LABELS[idx] || String(idx + 1);
+                                        return (
+                                            <div
+                                                key={idx}
+                                                className={`flex items-center gap-3 p-3 rounded-2xl border-2 transition cursor-pointer ${
+                                                    isActive
+                                                        ? 'border-blue-200 bg-blue-50'
+                                                        : 'border-slate-100 bg-slate-50 hover:border-slate-200'
+                                                }`}
+                                                onClick={() => handleActivate(idx)}
+                                            >
+                                                {/* 槽位標籤 */}
+                                                <div className={`w-9 h-9 rounded-full ${color} flex items-center justify-center text-white font-black text-sm shrink-0`}>
+                                                    {label}
+                                                </div>
+                                                {/* 名稱 + provider badge + Key */}
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2 mb-0.5">
+                                                        <span className="font-bold text-sm text-slate-700">{slot.name}</span>
+                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${providerInfo(slot.provider).color}`}>
+                                                            {providerInfo(slot.provider).label}
+                                                        </span>
+                                                    </div>
+                                                    <code className="text-xs text-slate-400 font-mono">{maskedKey(slot.key)}</code>
+                                                </div>
+                                                {/* 使用中標籤 */}
+                                                {isActive && (
+                                                    <span className="text-[10px] font-bold text-blue-500 bg-blue-100 px-2 py-0.5 rounded-full shrink-0">使用中</span>
+                                                )}
+                                                {/* 編輯按鈕 */}
+                                                <button
+                                                    onClick={e => { e.stopPropagation(); startEdit(idx); }}
+                                                    className="text-slate-300 hover:text-slate-500 transition shrink-0 p-1"
+                                                >
+                                                    <Icons.Edit3 size={16} />
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>
 
-                        {/* 安全提示 */}
+                        {/* 安全建議 */}
                         <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-[2rem] p-5 shadow-lg">
                             <h4 className="text-xs font-bold text-slate-400 mb-3">🔒 安全建議</h4>
                             <div className="space-y-3 text-sm text-slate-300 leading-relaxed">
                                 <div className="flex items-start gap-2">
                                     <span className="text-amber-400 shrink-0 mt-0.5">1.</span>
-                                    <p><strong className="text-white">不要共享含有 API Key 的網址。</strong>前端 JavaScript 中的 Key 任何人都能透過瀏覽器開發者工具看到。</p>
+                                    <p>Key 儲存於裝置本地（localStorage），<strong className="text-white">不會上傳伺服器</strong>，但仍可透過瀏覽器開發者工具查看。</p>
                                 </div>
                                 <div className="flex items-start gap-2">
                                     <span className="text-amber-400 shrink-0 mt-0.5">2.</span>
-                                    <p><strong className="text-white">建議設定 API Key 使用限制。</strong>到 <span className="text-blue-400">Google AI Studio</span> 設定每日用量上限，避免被濫用。</p>
+                                    <p>前往 <strong className="text-white">Google AI Studio</strong> 設定每日用量上限，即使 Key 洩漏也能限制損失。</p>
                                 </div>
                                 <div className="flex items-start gap-2">
                                     <span className="text-amber-400 shrink-0 mt-0.5">3.</span>
-                                    <p><strong className="text-white">理想做法：使用後端代理。</strong>將 API Key 存放在伺服器端（如 Vercel / Cloudflare Workers），前端只呼叫你自己的 API 端點，Key 永遠不會暴露。</p>
-                                </div>
-                                <div className="flex items-start gap-2">
-                                    <span className="text-amber-400 shrink-0 mt-0.5">4.</span>
-                                    <p><strong className="text-white">定期輪換 Key。</strong>如果懷疑 Key 被洩漏，立即到 Google AI Studio 重新產生新的 Key。</p>
+                                    <p>懷疑 Key 洩漏？立即至 AI Studio 撤銷並重新產生，舊 Key 會立即失效。</p>
                                 </div>
                             </div>
                         </div>
@@ -3217,23 +3450,262 @@ JSON結構: {
                             <ol className="space-y-2 text-sm text-slate-600">
                                 <li className="flex items-start gap-2">
                                     <span className="bg-blue-100 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
-                                    <span>前往 <strong>Google AI Studio</strong> (aistudio.google.com)</span>
+                                    <span>前往 <strong>Google AI Studio</strong>（aistudio.google.com）</span>
                                 </li>
                                 <li className="flex items-start gap-2">
                                     <span className="bg-blue-100 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
-                                    <span>登入 Google 帳號後，點擊 <strong>「Get API Key」</strong></span>
+                                    <span>登入 Google 帳號，點擊 <strong>「Get API Key」→「Create API Key」</strong></span>
                                 </li>
                                 <li className="flex items-start gap-2">
                                     <span className="bg-blue-100 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">3</span>
-                                    <span>點擊 <strong>「Create API Key」</strong>，選擇或建立 GCP 專案</span>
-                                </li>
-                                <li className="flex items-start gap-2">
-                                    <span className="bg-blue-100 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">4</span>
-                                    <span>複製產生的 Key，貼到上方欄位即可</span>
+                                    <span>複製以 <code className="bg-slate-100 px-1 rounded text-rose-500">AIza</code> 開頭的 Key，貼到上方新增即可</span>
                                 </li>
                             </ol>
                         </div>
 
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 工具 15: 喝水提醒 (Water Tracker)
+        // ==========================================
+        function ToolWater({ onBack }) {
+            const TODAY = new Date().toISOString().split('T')[0];
+            const [log, setLog] = useLocalStorage('baymax_water', {});
+            const [goal, setGoal] = useState(() => parseInt(localStorage.getItem('baymax_water_goal') || '2000', 10));
+            const [customMl, setCustomMl] = useState('');
+            const [editingGoal, setEditingGoal] = useState(false);
+            const [goalInput, setGoalInput] = useState(String(goal));
+
+            const todayMl = log[TODAY] || 0;
+            const pct = Math.min(100, Math.round((todayMl / goal) * 100));
+
+            const add = (ml) => {
+                setLog(prev => ({ ...prev, [TODAY]: (prev[TODAY] || 0) + ml }));
+            };
+
+            const reset = () => {
+                if (confirm('重設今日飲水記錄？')) {
+                    setLog(prev => { const n = { ...prev }; delete n[TODAY]; return n; });
+                }
+            };
+
+            const saveGoal = () => {
+                const v = parseInt(goalInput, 10);
+                if (v > 0) {
+                    setGoal(v);
+                    localStorage.setItem('baymax_water_goal', String(v));
+                }
+                setEditingGoal(false);
+            };
+
+            const QUICK = [
+                { label: '一小杯', ml: 200 },
+                { label: '瓶裝水', ml: 350 },
+                { label: '大杯水', ml: 500 },
+            ];
+
+            // 顏色：依完成百分比
+            const ringColor = pct >= 100 ? '#10b981' : pct >= 60 ? '#3b82f6' : '#94a3b8';
+            const circumference = 2 * Math.PI * 54;
+            const dashOffset = circumference * (1 - pct / 100);
+
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="喝水提醒" />
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar space-y-4 pb-safe-bottom">
+
+                        {/* 進度圓環 */}
+                        <div className="bg-white rounded-[2rem] p-6 shadow-soft flex flex-col items-center">
+                            <div className="relative w-36 h-36 mb-4">
+                                <svg className="w-full h-full -rotate-90" viewBox="0 0 120 120">
+                                    <circle cx="60" cy="60" r="54" fill="none" stroke="#f1f5f9" strokeWidth="10"/>
+                                    <circle cx="60" cy="60" r="54" fill="none" stroke={ringColor} strokeWidth="10"
+                                        strokeDasharray={circumference} strokeDashoffset={dashOffset}
+                                        strokeLinecap="round" style={{transition: 'stroke-dashoffset 0.5s ease'}}/>
+                                </svg>
+                                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                    <span className="text-3xl font-black text-slate-800">{pct}%</span>
+                                    <span className="text-xs text-slate-400 font-bold">{todayMl} ml</span>
+                                </div>
+                            </div>
+                            <p className="text-slate-500 text-sm">
+                                今日目標：<span className="font-bold text-slate-700">{goal} ml</span>
+                                {pct >= 100 && <span className="ml-2 text-emerald-500 font-bold">✓ 達標！</span>}
+                            </p>
+                            {/* 目標設定 */}
+                            {editingGoal ? (
+                                <div className="flex items-center gap-2 mt-3">
+                                    <input type="number" value={goalInput} onChange={e => setGoalInput(e.target.value)}
+                                        className="w-24 px-3 py-1.5 rounded-xl border-2 border-blue-200 text-center text-sm font-bold outline-none"
+                                        onKeyDown={e => e.key === 'Enter' && saveGoal()} autoFocus />
+                                    <span className="text-sm text-slate-400">ml</span>
+                                    <button onClick={saveGoal} className="text-xs font-bold text-blue-500 hover:text-blue-700">儲存</button>
+                                </div>
+                            ) : (
+                                <button onClick={() => { setGoalInput(String(goal)); setEditingGoal(true); }}
+                                    className="mt-2 text-xs text-slate-400 hover:text-blue-400 transition">
+                                    修改目標
+                                </button>
+                            )}
+                        </div>
+
+                        {/* 快速新增 */}
+                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                            <h4 className="text-xs font-bold text-slate-400 mb-3">快速新增</h4>
+                            <div className="grid grid-cols-3 gap-2 mb-3">
+                                {QUICK.map(({ label, ml }) => (
+                                    <button key={ml} onClick={() => add(ml)}
+                                        className="flex flex-col items-center py-3 bg-sky-50 hover:bg-sky-100 active:scale-95 rounded-2xl transition border border-sky-100">
+                                        <span className="text-xl mb-1">💧</span>
+                                        <span className="text-xs font-bold text-sky-700">{label}</span>
+                                        <span className="text-[10px] text-sky-500">{ml} ml</span>
+                                    </button>
+                                ))}
+                            </div>
+                            {/* 自訂輸入 */}
+                            <div className="flex gap-2">
+                                <input type="number" placeholder="自訂 ml..." value={customMl}
+                                    onChange={e => setCustomMl(e.target.value)}
+                                    className="flex-1 px-4 py-2.5 rounded-xl bg-slate-50 border-2 border-slate-100 focus:border-sky-300 outline-none text-sm text-slate-700 transition"
+                                    onKeyDown={e => { if (e.key === 'Enter' && parseInt(customMl) > 0) { add(parseInt(customMl)); setCustomMl(''); }}}
+                                />
+                                <button onClick={() => { if (parseInt(customMl) > 0) { add(parseInt(customMl)); setCustomMl(''); }}}
+                                    disabled={!parseInt(customMl)}
+                                    className="px-4 py-2.5 bg-sky-500 text-white rounded-xl font-bold text-sm hover:bg-sky-600 active:scale-95 transition disabled:opacity-40">
+                                    加入
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* 今日紀錄 + 重設 */}
+                        <div className="flex justify-between items-center px-1">
+                            <p className="text-xs text-slate-400">今日已喝 <span className="font-bold text-sky-500">{todayMl} ml</span></p>
+                            <button onClick={reset} className="text-xs text-slate-400 hover:text-rose-400 transition">重設今日</button>
+                        </div>
+
+                        {/* 大白寄語 */}
+                        <div className="bg-slate-800 text-white p-5 rounded-[2rem]">
+                            <p className="text-sm leading-relaxed">
+                                {pct >= 100
+                                    ? '"今天喝水達標了！大白為你感到驕傲。繼續保持。"'
+                                    : pct >= 50
+                                    ? '"進度不錯！還需要補充 ' + (goal - todayMl) + ' ml 才能達標。"'
+                                    : '"記得多喝水喔！人體有 60% 是水分，充足的水分對健康非常重要。"'
+                                }
+                            </p>
+                        </div>
+
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 工具 16: 文章摘要 (Article Summarizer)
+        // ==========================================
+        function ToolSummarize({ onBack }) {
+            const [input, setInput] = useState('');
+            const [result, setResult] = useState(null);
+            const [loading, setLoading] = useState(false);
+
+            const handleSummarize = async () => {
+                if (!input.trim()) return;
+                setLoading(true);
+                try {
+                    const prompt = `你是大白，一個聰明的閱讀助手。請分析以下文章，提供精準摘要。
+使用繁體中文回覆。
+JSON結構: {
+  "title": "String (推斷的文章標題，若無則自行命名)",
+  "summary": "String (2-3句核心摘要)",
+  "keyPoints": ["String", "String", "String"],
+  "readingTime": "String (估計閱讀原文的時間，如 3 分鐘)",
+  "sentiment": "正面|中立|負面",
+  "baymaxTip": "String (大白對這篇文章的一句評語)"
+}`;
+                    const data = await callAI([{ text: input }], prompt);
+                    setResult(data);
+                } catch (e) { /* 錯誤已在 callAI 處理 */ }
+                setLoading(false);
+            };
+
+            const sentimentStyle = (s) => {
+                if (s === '正面') return 'bg-emerald-100 text-emerald-700';
+                if (s === '負面') return 'bg-rose-100 text-rose-600';
+                return 'bg-slate-100 text-slate-600';
+            };
+
+            return (
+                <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
+                    <PageHeader onBack={onBack} title="文章摘要" />
+                    <div className="flex-1 overflow-y-auto p-6 no-scrollbar space-y-4 pb-safe-bottom">
+
+                        {/* 輸入區 */}
+                        <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                            <label className="text-xs font-bold text-slate-400 block mb-2">貼上文章內容</label>
+                            <textarea
+                                value={input}
+                                onChange={e => { setInput(e.target.value); setResult(null); }}
+                                placeholder="將文章、新聞或任何長文貼到這裡..."
+                                className="w-full bg-slate-50 rounded-xl p-3 outline-none resize-none h-36 text-sm placeholder-slate-300 focus:ring-2 focus:ring-indigo-100 transition"
+                            />
+                            <button
+                                onClick={handleSummarize}
+                                disabled={loading || !input.trim()}
+                                className="mt-3 w-full py-3.5 bg-indigo-500 text-white rounded-2xl font-bold hover:bg-indigo-600 active:scale-95 transition-all disabled:opacity-40 shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
+                            >
+                                {loading
+                                    ? <><Spinner /> 摘要中...</>
+                                    : <><Icons.Sparkles size={18} /> 生成摘要</>}
+                            </button>
+                        </div>
+
+                        {/* 結果 */}
+                        {result && (
+                            <div className="space-y-3 animate-slide-up">
+                                {/* 標題 + 元資訊 */}
+                                <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                    <h3 className="text-lg font-black text-slate-800 mb-3 leading-snug">{result.title}</h3>
+                                    <div className="flex flex-wrap gap-2 mb-4">
+                                        <span className="text-xs bg-slate-100 text-slate-500 px-3 py-1 rounded-full font-bold">
+                                            📖 {result.readingTime}
+                                        </span>
+                                        {result.sentiment && (
+                                            <span className={`text-xs px-3 py-1 rounded-full font-bold ${sentimentStyle(result.sentiment)}`}>
+                                                {result.sentiment === '正面' ? '👍' : result.sentiment === '負面' ? '👎' : '📊'} {result.sentiment}
+                                            </span>
+                                        )}
+                                    </div>
+                                    {/* 核心摘要 */}
+                                    <p className="text-sm text-slate-600 leading-relaxed">{result.summary}</p>
+                                </div>
+
+                                {/* 重點列表 */}
+                                <div className="bg-white rounded-[2rem] p-5 shadow-soft">
+                                    <h4 className="text-xs font-bold text-slate-400 mb-3">重點摘錄</h4>
+                                    <div className="space-y-2">
+                                        {result.keyPoints?.map((pt, i) => (
+                                            <div key={i} className="flex items-start gap-3">
+                                                <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-[10px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
+                                                <p className="text-sm text-slate-600 leading-relaxed">{pt}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* 大白評語 */}
+                                <div className="bg-slate-800 text-white p-5 rounded-[2rem]">
+                                    <p className="text-sm leading-relaxed">"{result.baymaxTip}"</p>
+                                </div>
+
+                                <button onClick={() => { setInput(''); setResult(null); }}
+                                    className="w-full py-3 text-slate-400 font-bold text-sm">
+                                    再摘要一篇
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             );
@@ -3259,6 +3731,8 @@ JSON結構: {
                 { id: 'firstaid', name: '急救指南', icon: <Icons.HeartPulse size={28} />, desc: '初步急救建議' },
                 { id: 'travel', name: '旅行助手', icon: <Icons.MapPin size={28} />, desc: '行程規劃' },
                 { id: 'translator', name: '翻譯器', icon: <Icons.Languages size={28} />, desc: '多語翻譯' },
+                { id: 'water', name: '喝水提醒', icon: <Icons.Droplets size={28} />, desc: '每日飲水追蹤' },
+                { id: 'summarize', name: '文章摘要', icon: <Icons.FileText size={28} />, desc: 'AI 重點提取' },
             ];
 
             const toolComponents = {
@@ -3275,10 +3749,31 @@ JSON結構: {
                 firstaid: ToolFirstAid,
                 travel: ToolTravel,
                 translator: ToolTranslator,
+                water: ToolWater,
+                summarize: ToolSummarize,
                 settings: ToolSettings,
             };
 
             const goHome = useCallback(() => setView('home'), []);
+
+            // 偵測是否已設定 API Key（每次回首頁時重新檢查）
+            const hasApiKey = !!getApiKey();
+
+            // 健康儀表板資料（直接從 localStorage 讀取，每次回首頁重新取得）
+            const dashData = React.useMemo(() => {
+                const today = new Date().toISOString().split('T')[0];
+                const thisMonth = new Date().toISOString().slice(0, 7);
+                const habits = safeReadStorage('baymax_habits', []);
+                const doneToday = habits.filter(h => h.records?.includes(today)).length;
+                const expenses = safeReadStorage('baymax_expenses', []);
+                const monthTotal = expenses
+                    .filter(r => r.date?.startsWith(thisMonth))
+                    .reduce((s, r) => s + (r.amount || 0), 0);
+                const waterLog = safeReadStorage('baymax_water', {});
+                const waterGoal = parseInt(localStorage.getItem('baymax_water_goal') || '2000', 10);
+                const todayWater = waterLog[today] || 0;
+                return { doneToday, totalHabits: habits.length, monthTotal, todayWater, waterGoal };
+            }, [view]); // 每次 view 變更時重新計算（包含從工具頁返回時）
 
             // 渲染對應工具元件
             const ActiveTool = toolComponents[view];
@@ -3311,6 +3806,77 @@ JSON結構: {
                                     </h1>
                                     <p className="text-slate-400 mt-1 font-medium">你的個人健康護理助理。</p>
                                 </div>
+
+                                {/* 無 API Key 提示 banner */}
+                                {!hasApiKey && (
+                                    <button
+                                        onClick={() => setView('settings')}
+                                        className="mb-3 shrink-0 w-full flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-left hover:bg-amber-100 active:scale-95 transition-all"
+                                    >
+                                        <span className="text-lg shrink-0">⚙️</span>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-sm font-bold text-amber-700">尚未設定 API Key</p>
+                                            <p className="text-xs text-amber-500">點此前往設定，AI 功能才能正常運作</p>
+                                        </div>
+                                        <Icons.ChevronLeft className="text-amber-400 rotate-180 shrink-0" size={18} />
+                                    </button>
+                                )}
+
+                                {/* 健康儀表板 */}
+                                {(dashData.totalHabits > 0 || dashData.todayWater > 0 || dashData.monthTotal > 0) && (
+                                    <div className="mb-3 shrink-0">
+                                        <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+                                            {/* 習慣完成率 */}
+                                            {dashData.totalHabits > 0 && (
+                                                <button onClick={() => setView('habit')}
+                                                    className="flex-shrink-0 bg-white rounded-2xl px-4 py-3 shadow-card border border-slate-100 flex items-center gap-3 hover:shadow-soft active:scale-95 transition-all min-w-[140px]">
+                                                    <div className="w-9 h-9 rounded-full bg-emerald-50 flex items-center justify-center text-lg shrink-0">✅</div>
+                                                    <div className="text-left">
+                                                        <p className="text-xs text-slate-400 font-bold">今日習慣</p>
+                                                        <p className="text-base font-black text-slate-800">
+                                                            {dashData.doneToday}
+                                                            <span className="text-xs font-bold text-slate-400"> / {dashData.totalHabits}</span>
+                                                        </p>
+                                                    </div>
+                                                </button>
+                                            )}
+                                            {/* 喝水進度 */}
+                                            <button onClick={() => setView('water')}
+                                                className="flex-shrink-0 bg-white rounded-2xl px-4 py-3 shadow-card border border-slate-100 flex items-center gap-3 hover:shadow-soft active:scale-95 transition-all min-w-[140px]">
+                                                <div className="w-9 h-9 rounded-full bg-sky-50 flex items-center justify-center shrink-0">
+                                                    <Icons.Droplets size={18} className="text-sky-500" />
+                                                </div>
+                                                <div className="text-left">
+                                                    <p className="text-xs text-slate-400 font-bold">今日飲水</p>
+                                                    <p className="text-base font-black text-slate-800">
+                                                        {dashData.todayWater}
+                                                        <span className="text-xs font-bold text-slate-400"> ml</span>
+                                                    </p>
+                                                    <div className="w-full h-1 bg-slate-100 rounded-full mt-1">
+                                                        <div className="h-1 bg-sky-400 rounded-full transition-all"
+                                                            style={{width: `${Math.min(100, Math.round(dashData.todayWater / dashData.waterGoal * 100))}%`}} />
+                                                    </div>
+                                                </div>
+                                            </button>
+                                            {/* 本月支出 */}
+                                            {dashData.monthTotal > 0 && (
+                                                <button onClick={() => setView('expense')}
+                                                    className="flex-shrink-0 bg-white rounded-2xl px-4 py-3 shadow-card border border-slate-100 flex items-center gap-3 hover:shadow-soft active:scale-95 transition-all min-w-[140px]">
+                                                    <div className="w-9 h-9 rounded-full bg-teal-50 flex items-center justify-center shrink-0">
+                                                        <Icons.Wallet size={18} className="text-teal-500" />
+                                                    </div>
+                                                    <div className="text-left">
+                                                        <p className="text-xs text-slate-400 font-bold">本月支出</p>
+                                                        <p className="text-base font-black text-slate-800">
+                                                            {dashData.monthTotal.toLocaleString()}
+                                                            <span className="text-xs font-bold text-slate-400"> 元</span>
+                                                        </p>
+                                                    </div>
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                                 <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar grid grid-cols-2 gap-4 auto-rows-min content-start pb-safe-bottom px-1">
                                     {tools.map((tool) => (
                                         <button
