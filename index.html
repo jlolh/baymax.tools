@@ -98,24 +98,31 @@
         // ==========================================
         // 設定 & API
         // ==========================================
-        const PROXY_BASE = "https://gemini-api-proxy-omega-khaki.vercel.app";
-        const API_URL = `${PROXY_BASE}/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent`;
+        const GEMINI_PROXY = "https://gemini-api-proxy-omega-khaki.vercel.app";
+        const GEMINI_URL = `${GEMINI_PROXY}/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent`;
+        const MINIMAX_URL = "https://api.minimaxi.chat/v1/chat/completions";
+        const MINIMAX_MODEL = "MiniMax-Text-01";
 
         /**
-         * 取得目前使用中的 API Key
-         * 讀取順序：使用中的 slot → 第一個有效 slot → null
+         * 取得目前使用中的 API 設定 { key, provider }
+         * provider: "gemini" | "minimax"
          */
-        function getApiKey() {
+        function getApiConfig() {
             try {
                 const slots = JSON.parse(localStorage.getItem('baymax_api_slots') || '[]');
                 const activeIdx = parseInt(localStorage.getItem('baymax_api_active') || '0', 10);
                 const active = slots[activeIdx];
-                if (active?.key?.trim()) return active.key.trim();
+                if (active?.key?.trim()) return { key: active.key.trim(), provider: active.provider || 'gemini' };
                 const first = slots.find(s => s.key?.trim());
-                return first ? first.key.trim() : null;
+                return first ? { key: first.key.trim(), provider: first.provider || 'gemini' } : null;
             } catch (e) {
                 return null;
             }
+        }
+
+        /** 向後相容：只取 key 字串 */
+        function getApiKey() {
+            return getApiConfig()?.key ?? null;
         }
 
         // ==========================================
@@ -159,25 +166,62 @@
         }
 
         /**
-         * 呼叫 Gemini API
+         * 將 Gemini parts 格式轉換為 OpenAI messages 格式（供 MiniMax 使用）
          */
-        async function callGemini(parts, systemPrompt) {
-            const apiKey = getApiKey();
-            if (!apiKey) {
-                alert("⚙️ 尚未設定 API Key\n請點擊右上角齒輪圖示前往設定頁面，新增你的 Gemini API Key。");
+        function partsToOpenAIContent(parts) {
+            const mapped = parts.map(p => {
+                if (p.inlineData) {
+                    return { type: "image_url", image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } };
+                }
+                return { type: "text", text: p.text };
+            });
+            // 純文字時用簡單字串格式，否則用陣列格式（含圖片）
+            if (mapped.length === 1 && mapped[0].type === 'text') return mapped[0].text;
+            return mapped;
+        }
+
+        /**
+         * 呼叫 AI API（自動依 slot provider 路由至 Gemini 或 MiniMax）
+         */
+        async function callAI(parts, systemPrompt) {
+            const config = getApiConfig();
+            if (!config) {
+                alert("⚙️ 尚未設定 API Key\n請點擊右上角齒輪圖示前往設定頁面，新增你的 API Key。");
                 throw new Error("NO_API_KEY");
             }
 
+            const { key, provider } = config;
+
             try {
-                const response = await fetch(`${API_URL}?key=${apiKey}`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        contents: [{ role: "user", parts }],
-                        systemInstruction: { parts: [{ text: systemPrompt }] },
-                        generationConfig: { responseMimeType: "application/json" }
-                    }),
-                });
+                let response;
+                if (provider === 'minimax') {
+                    response = await fetch(MINIMAX_URL, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Authorization": `Bearer ${key}`
+                        },
+                        body: JSON.stringify({
+                            model: MINIMAX_MODEL,
+                            messages: [
+                                { role: "system", content: systemPrompt },
+                                { role: "user",   content: partsToOpenAIContent(parts) }
+                            ],
+                            response_format: { type: "json_object" }
+                        }),
+                    });
+                } else {
+                    // Gemini（預設）
+                    response = await fetch(`${GEMINI_URL}?key=${key}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            contents: [{ role: "user", parts }],
+                            systemInstruction: { parts: [{ text: systemPrompt }] },
+                            generationConfig: { responseMimeType: "application/json" }
+                        }),
+                    });
+                }
 
                 if (!response.ok) {
                     const errorText = await response.text();
@@ -185,25 +229,27 @@
                 }
 
                 const data = await response.json();
-                const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                let text;
+                if (provider === 'minimax') {
+                    text = data.choices?.[0]?.message?.content;
+                } else {
+                    text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                }
                 return JSON.parse(text.replace(/```json|```/g, '').trim());
+
             } catch (error) {
                 console.error("API Call Failed:", error);
-
                 if (error.message.includes("Failed to fetch") || error.name === 'TypeError') {
-                    alert(
-                        "⚠️ CORS 連線錯誤 (Access Blocked)\n\n" +
-                        "原因：Vercel 伺服器拒絕了您的連線。\n" +
-                        "解決方法：\n" +
-                        "1. 如果這是您的 Vercel 專案，請在 vercel.json 中加入 CORS Header。\n" +
-                        "2. 如果不是，請使用瀏覽器外掛 'Allow CORS' (僅限測試)。"
-                    );
+                    alert("⚠️ 連線失敗\n請確認網路連線，或 API 伺服器是否正常。");
                 } else {
                     alert("連線失敗：" + error.message);
                 }
                 throw error;
             }
         }
+
+        /** 向後相容別名 */
+        const callGemini = callAI;
 
         // ==========================================
         // Icons (Lucide SVG 元件)
@@ -3040,7 +3086,7 @@ JSON結構: {
             const SLOT_COLORS = ['bg-blue-500', 'bg-violet-500', 'bg-emerald-500'];
             const SLOT_LABELS = ['A', 'B', 'C'];
 
-            // slots: [{ name, key }], activeIdx: number
+            // slots: [{ name, key, provider }], activeIdx: number
             const [slots, setSlots] = useState(() => {
                 try { return JSON.parse(localStorage.getItem('baymax_api_slots') || '[]'); } catch { return []; }
             });
@@ -3049,12 +3095,20 @@ JSON結構: {
             });
 
             // 編輯某個 slot 的狀態
-            const [editingIdx, setEditingIdx] = useState(null); // null = 不在編輯；數字 = 正在編輯哪個 slot
+            const [editingIdx, setEditingIdx] = useState(null);
             const [editName, setEditName] = useState('');
             const [editKey, setEditKey] = useState('');
+            const [editProvider, setEditProvider] = useState('gemini');
             const [showKey, setShowKey] = useState(false);
             const [testStatus, setTestStatus] = useState(null);
             const [testMsg, setTestMsg] = useState('');
+
+            const PROVIDERS = [
+                { id: 'gemini',   label: 'Google Gemini',  hint: 'AIza 開頭',  color: 'bg-blue-100 text-blue-700' },
+                { id: 'minimax',  label: 'MiniMax',        hint: 'eyJ 或其他',  color: 'bg-violet-100 text-violet-700' },
+            ];
+
+            const providerInfo = (id) => PROVIDERS.find(p => p.id === id) || PROVIDERS[0];
 
             const maskedKey = (key) => {
                 if (!key) return '（未設定）';
@@ -3062,7 +3116,11 @@ JSON結構: {
                 return key.slice(0, 6) + '••••••••' + key.slice(-4);
             };
 
-            const isValidGeminiKey = (k) => k.trim().startsWith('AIza') && k.trim().length > 20;
+            const keyWarning = (key, provider) => {
+                if (!key.trim()) return null;
+                if (provider === 'gemini' && !key.trim().startsWith('AIza')) return '⚠️ Gemini Key 通常以「AIza」開頭';
+                return null;
+            };
 
             const persistSlots = (newSlots, newActive) => {
                 try {
@@ -3077,9 +3135,10 @@ JSON結構: {
             };
 
             const startAdd = () => {
-                setEditingIdx(slots.length); // 新 slot 的 index
+                setEditingIdx(slots.length);
                 setEditName(`Key ${SLOT_LABELS[slots.length] || slots.length + 1}`);
                 setEditKey('');
+                setEditProvider('gemini');
                 setShowKey(false);
                 setTestStatus(null);
             };
@@ -3088,6 +3147,7 @@ JSON結構: {
                 setEditingIdx(idx);
                 setEditName(slots[idx].name);
                 setEditKey(slots[idx].key);
+                setEditProvider(slots[idx].provider || 'gemini');
                 setShowKey(false);
                 setTestStatus(null);
             };
@@ -3096,7 +3156,7 @@ JSON結構: {
                 const key = editKey.trim();
                 const name = editName.trim() || `Key ${editingIdx + 1}`;
                 const newSlots = [...slots];
-                newSlots[editingIdx] = { name, key };
+                newSlots[editingIdx] = { name, key, provider: editProvider };
                 const newActive = editingIdx < slots.length ? activeIdx : editingIdx;
                 setSlots(newSlots);
                 setActiveIdx(newActive);
@@ -3119,21 +3179,33 @@ JSON結構: {
                 setTestStatus('testing');
                 setTestMsg('');
                 try {
-                    const response = await fetch(`${API_URL}?key=${key}`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            contents: [{ role: "user", parts: [{ text: "hi" }] }],
-                            generationConfig: { maxOutputTokens: 5 }
-                        }),
-                    });
+                    let response;
+                    if (editProvider === 'minimax') {
+                        response = await fetch(MINIMAX_URL, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
+                            body: JSON.stringify({
+                                model: MINIMAX_MODEL,
+                                messages: [{ role: "user", content: "hi" }],
+                                max_tokens: 5
+                            }),
+                        });
+                    } else {
+                        response = await fetch(`${GEMINI_URL}?key=${key}`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                contents: [{ role: "user", parts: [{ text: "hi" }] }],
+                                generationConfig: { maxOutputTokens: 5 }
+                            }),
+                        });
+                    }
                     if (response.ok) {
                         setTestStatus('success');
                         setTestMsg('✓ 連線成功，Key 有效');
                     } else {
-                        const errText = await response.text();
                         setTestStatus('error');
-                        setTestMsg(response.status === 400 || response.status === 403
+                        setTestMsg(response.status === 400 || response.status === 401 || response.status === 403
                             ? '✗ API Key 無效或已過期'
                             : `✗ 錯誤 ${response.status}`);
                     }
@@ -3148,8 +3220,7 @@ JSON結構: {
             // ── 編輯畫面 ──────────────────────────────────────────
             if (editingIdx !== null) {
                 const isNew = editingIdx >= slots.length;
-                const keyValid = isValidGeminiKey(editKey);
-                const keyWarning = editKey.trim() && !keyValid;
+                const warn = keyWarning(editKey, editProvider);
                 return (
                     <div className="flex flex-col h-full animate-slide-up bg-slate-50 md:rounded-[2.5rem] overflow-hidden pt-safe-top">
                         <PageHeader onBack={() => setEditingIdx(null)} title={isNew ? '新增 API Key' : '編輯 API Key'} />
@@ -3166,17 +3237,38 @@ JSON結構: {
                                 />
                             </div>
 
+                            {/* API 服務商選擇 */}
+                            <div className="bg-white rounded-2xl p-4 shadow-soft">
+                                <label className="text-xs font-bold text-slate-400 block mb-3">AI 服務商</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {PROVIDERS.map(p => (
+                                        <button
+                                            key={p.id}
+                                            onClick={() => { setEditProvider(p.id); setTestStatus(null); }}
+                                            className={`flex flex-col items-start p-3 rounded-xl border-2 transition text-left ${
+                                                editProvider === p.id
+                                                    ? 'border-blue-400 bg-blue-50'
+                                                    : 'border-slate-100 bg-slate-50 hover:border-slate-200'
+                                            }`}
+                                        >
+                                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full mb-1 ${p.color}`}>{p.label}</span>
+                                            <span className="text-[11px] text-slate-400 font-mono">{p.hint}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
                             {/* API Key 輸入 */}
                             <div className="bg-white rounded-2xl p-4 shadow-soft">
-                                <label className="text-xs font-bold text-slate-400 block mb-2">Gemini API Key</label>
+                                <label className="text-xs font-bold text-slate-400 block mb-2">API Key</label>
                                 <div className="relative">
                                     <input
                                         type={showKey ? "text" : "password"}
                                         value={editKey}
                                         onChange={e => { setEditKey(e.target.value); setTestStatus(null); }}
-                                        placeholder="AIza..."
+                                        placeholder={editProvider === 'gemini' ? 'AIza...' : '貼上 MiniMax API Key...'}
                                         className={`w-full px-4 py-3 pr-12 rounded-xl bg-slate-50 border-2 focus:outline-none text-sm text-slate-700 font-mono transition ${
-                                            keyWarning ? 'border-amber-300' : 'border-slate-100 focus:border-blue-300'
+                                            warn ? 'border-amber-300' : 'border-slate-100 focus:border-blue-300'
                                         }`}
                                     />
                                     <button
@@ -3186,9 +3278,7 @@ JSON結構: {
                                         {showKey ? <Icons.EyeOff size={18} /> : <Icons.Eye size={18} />}
                                     </button>
                                 </div>
-                                {keyWarning && (
-                                    <p className="mt-1.5 text-xs text-amber-500">⚠️ Gemini Key 通常以「AIza」開頭，請確認是否正確</p>
-                                )}
+                                {warn && <p className="mt-1.5 text-xs text-amber-500">{warn}</p>}
 
                                 {/* 測試 */}
                                 <button
@@ -3290,9 +3380,14 @@ JSON結構: {
                                                 <div className={`w-9 h-9 rounded-full ${color} flex items-center justify-center text-white font-black text-sm shrink-0`}>
                                                     {label}
                                                 </div>
-                                                {/* 名稱 + Key */}
+                                                {/* 名稱 + provider badge + Key */}
                                                 <div className="flex-1 min-w-0">
-                                                    <div className="font-bold text-sm text-slate-700">{slot.name}</div>
+                                                    <div className="flex items-center gap-2 mb-0.5">
+                                                        <span className="font-bold text-sm text-slate-700">{slot.name}</span>
+                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${providerInfo(slot.provider).color}`}>
+                                                            {providerInfo(slot.provider).label}
+                                                        </span>
+                                                    </div>
                                                     <code className="text-xs text-slate-400 font-mono">{maskedKey(slot.key)}</code>
                                                 </div>
                                                 {/* 使用中標籤 */}
