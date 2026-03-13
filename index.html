@@ -510,7 +510,6 @@
                     setResult(data);
                     setStep('result');
                 } catch (e) {
-                    alert(e.message);
                     setStep('idle');
                 }
             };
@@ -629,7 +628,7 @@
                     setHistory(prev => [{ ...data, id: Date.now() }, ...prev]);
                     setInput("");
                 } catch (e) {
-                    alert("查詢失敗，請稍後再試");
+                    // 錯誤已在 callGemini 處理
                 }
                 setLoading(false);
             };
@@ -933,7 +932,6 @@
                     setResult(data);
                     setStep('result');
                 } catch (e) {
-                    alert("掃描失敗");
                     setStep('idle');
                 }
             };
@@ -1067,6 +1065,7 @@
                         ...p
                     ]);
                     setViewMode('list');
+                    setNewEntry({ service: '', username: '', password: '', note: '' });
                 }
                 setLoading(false);
             };
@@ -1261,7 +1260,7 @@
                     setViewMode('list');
                     setNewEntry({ title: '', rating: 5 });
                 } catch (e) {
-                    alert("找不到這部電影...");
+                    // 錯誤已在 callGemini 處理
                 }
                 setLoading(false);
             };
@@ -1874,7 +1873,6 @@ JSON結構: { "ingredients": ["String"], "recipes": [{ "name": "String", "diffic
                     setResult(data);
                     setStep('result');
                 } catch (e) {
-                    alert("分析失敗，請重試");
                     setStep('idle');
                 }
             };
@@ -2627,7 +2625,7 @@ JSON結構: {
                     setViewMode('detail');
                     setNewTrip({ destination: '', days: '3', style: '' });
                 } catch (e) {
-                    alert("規劃失敗，請重試");
+                    // 錯誤已在 callGemini 處理
                 }
                 setLoading(false);
             };
